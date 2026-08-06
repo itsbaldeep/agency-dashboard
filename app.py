@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify, redirect, send_file, make_response, send_from_directory
+import markdown
 import psycopg2.extras
 
 import models
@@ -193,6 +194,22 @@ def content():
 def content_data():
     data = models.get_content()
     return render_template("fragments/content_list.html", **data)
+
+
+@app.route("/content/<int:item_id>/preview")
+def content_preview(item_id):
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT title, body FROM content_items WHERE id=%s", (item_id,))
+        ci = cur.fetchone()
+        if not ci:
+            return "Not found", 404
+        html = markdown.markdown(ci['body'] or '*No content generated yet.*')
+        return render_template("base.html", title=ci['title'],
+                               content=f"<h1>{ci['title']}</h1>{html}")
+    finally:
+        conn.close()
 
 
 @app.route("/content/<int:ci_id>/download")
