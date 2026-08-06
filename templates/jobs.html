@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Job Search Campaigns</h1>
+  <div class="sub">Automated job applications &mdash; tailor resumes, draft cover letters, email hiring managers</div>
+</div>
+
+<div class="stats" style="margin-bottom: 20px;">
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--accent)">{{ stats.campaigns }}</div>
+    <div class="stat-label">Campaigns</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--green)">{{ stats.listings }}</div>
+    <div class="stat-label">Jobs Found</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--blue)">{{ stats.applications }}</div>
+    <div class="stat-label">Applications</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--green)">{{ stats.emails_sent }}</div>
+    <div class="stat-label">Emails Sent</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--amber)">{{ stats.active }}</div>
+    <div class="stat-label">Active</div>
+  </div>
+</div>
+
+<div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap;">
+  <a href="/jobs/new" class="btn btn-primary">+ New Campaign</a>
+  <a href="/jobs/applications" class="btn">All Applications</a>
+</div>
+
+{% if campaigns %}
+<div class="card">
+  <table style="width:100%;border-collapse:collapse;">
+    <thead>
+      <tr style="border-bottom:1px solid var(--border);text-align:left;">
+        <th style="padding:8px 12px;">Name</th>
+        <th style="padding:8px 12px;">Status</th>
+        <th style="padding:8px 12px;">Target/Run</th>
+        <th style="padding:8px 12px;">Listings</th>
+        <th style="padding:8px 12px;">Apps</th>
+        <th style="padding:8px 12px;">Runs</th>
+        <th style="padding:8px 12px;">Last Run</th>
+        <th style="padding:8px 12px;">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in campaigns %}
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:8px 12px;"><a href="/jobs/{{ c.id }}" style="font-weight:600;">{{ c.name }}</a></td>
+        <td style="padding:8px 12px;">
+          <span class="badge badge-{{ 'green' if c.status == 'active' else 'amber' if c.status == 'draft' else 'dim' }}">{{ c.status }}</span>
+        </td>
+        <td style="padding:8px 12px;">{{ c.target_jobs_per_run }}/{{ c.run_interval_hours }}h</td>
+        <td style="padding:8px 12px;">{{ c.listing_count }}</td>
+        <td style="padding:8px 12px;">{{ c.application_count }}</td>
+        <td style="padding:8px 12px;">{{ c.run_count }}</td>
+        <td style="padding:8px 12px;">{{ c.last_run.strftime('%Y-%m-%d %H:%M') if c.last_run else 'Never' }}</td>
+        <td style="padding:8px 12px;">
+          <form action="/jobs/{{ c.id }}/run" method="post" style="display:inline;" onsubmit="return confirm('Run campaign now?')">
+            <button class="btn btn-green" style="font-size:11px;padding:3px 8px;">Run</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card">
+  <p class="empty">No campaigns yet. <a href="/jobs/new">Create your first campaign</a>.</p>
+</div>
+{% endif %}
+{% endblock %}

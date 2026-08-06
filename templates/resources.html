@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Resources</h1>
+  <div class="sub">Container resource usage by project</div>
+</div>
+
+<div id="res-main"
+     hx-get="/resources/data"
+     hx-trigger="load, every 15s"
+     hx-select="#res-main"
+     hx-swap="outerHTML">
+  <div class="stats">
+    {% for _ in range(4) %}
+    <div class="stat-card"><div class="skel skel-h" style="width:40%;margin:0 auto"></div></div>
+    {% endfor %}
+  </div>
+  <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
+</div>
+{% endblock %}

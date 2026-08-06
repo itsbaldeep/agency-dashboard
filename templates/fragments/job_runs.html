@@ -1,0 +1,23 @@
+<div id="runs-main"
+     hx-get="/operations/job-runs"
+     hx-trigger="every 15s"
+     hx-select="#runs-main"
+     hx-swap="outerHTML">
+  <div class="card-header"><span class="card-title">Job Runs</span></div>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Job</th><th>Status</th><th>Started</th><th>Duration</th><th>Detail</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td><strong>{{ r.job_name }}</strong></td>
+      <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
+      <td class="mono subtle">{{ r.started_at.strftime('%m/%d %H:%M') if r.started_at else '' }}</td>
+      <td class="mono subtle">{{ r.duration_sec }}s</td>
+      <td class="subtle truncate">{{ r.detail[:80] if r.detail else '' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5"><p class="empty">No runs yet</p></td></tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>

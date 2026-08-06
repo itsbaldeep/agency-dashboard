@@ -1,0 +1,55 @@
+{% set mem = resources.memory %}
+{% set disk = resources.disk %}
+<div id="res-main"
+     hx-get="/resources/data"
+     hx-trigger="every 15s"
+     hx-select="#res-main"
+     hx-swap="outerHTML">
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--accent)">{{ resources.container_count }}</div>
+      <div class="stat-label">Containers</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--accent)">{{ "%.0f"|format(resources.total_container_mem_mb) }}MiB</div>
+      <div class="stat-label">Container RAM</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--text-bright)">{{ mem.used_gb }}/{{ mem.total_gb }} GB</div>
+      <div class="stat-label">Host RAM</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--text-bright)">{{ disk.used }}/{{ disk.size }}</div>
+      <div class="stat-label">Disk</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">By Project</span></div>
+    {% for p in resources.projects %}
+    <details class="suggestion-card">
+      <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;outline:none">
+        <strong style="flex:1;color:var(--text-bright)">{{ p.name }}</strong>
+        <span class="subtle">{{ "%.1f"|format(p.cpu_sum) }}% CPU</span>
+        <span class="subtle">{{ "%.0f"|format(p.mem_mb) }}MiB RAM</span>
+      </summary>
+      <div class="table-wrap mt-2">
+      <table>
+        <tr><th>Service</th><th>Container</th><th>CPU</th><th>RAM</th><th>PIDs</th></tr>
+        {% for svc in p.services %}
+        <tr>
+          <td><strong>{{ svc.service }}</strong></td>
+          <td class="mono subtle">{{ svc.container[:20] }}</td>
+          <td class="mono">{{ svc.cpu_perc }}</td>
+          <td class="mono">{{ svc.mem_used }}</td>
+          <td class="mono">{{ svc.pids }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+    </details>
+    {% else %}
+    <p class="empty">No container data</p>
+    {% endfor %}
+  </div>
+</div>

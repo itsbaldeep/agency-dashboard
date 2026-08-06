@@ -1,0 +1,50 @@
+<div>
+  {% if tasks %}
+  <div class="card-header"><span class="card-title">Recent Tasks ({{ tasks|length }})</span></div>
+  <div class="table-wrap">
+  <table>
+    <tr><th>ID</th><th>Type</th><th>Status</th><th>Created</th><th>Duration</th></tr>
+    {% for t in tasks %}
+    {% set dur = '' %}
+    {% if t.started_at and t.finished_at %}
+      {% set dur = ((t.finished_at - t.started_at).total_seconds()|int) ~ 's' %}
+    {% elif t.started_at and not t.finished_at %}
+      {% set dur = 'running' %}
+    {% endif %}
+    <tr>
+      <td class="mono">#{{ t.id }}</td>
+      <td>{{ t.type }}</td>
+      <td><span class="badge {{ t.status }}">{{ t.status }}</span></td>
+      <td class="subtle mono">{{ t.created_at.strftime('%b %d %H:%M') if t.created_at else '-' }}</td>
+      <td class="mono subtle">{{ dur }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="card-header"><span class="card-title">Recent Tasks</span></div>
+    <p class="empty">No recent tasks</p>
+  </div>
+  {% endif %}
+
+  {% if events %}
+  <div class="card-header mt-3"><span class="card-title">Events ({{ events|length }})</span></div>
+  <div class="timeline">
+    {% for evt in events %}
+    <div class="event">
+      <span class="ts">{{ evt.ts[:19] if evt.ts else '' }}</span>
+      <span class="action">{{ evt.action }}</span>
+      <span class="detail">{{ evt.detail[:200] if evt.detail else '' }}</span>
+      {% if evt.gate %}<span class="badge badge-dim">{{ evt.gate }}</span>{% endif %}
+      {% if evt.decision %}<span class="badge {{ 'badge-green' if evt.ok=='true' else 'badge-red' }}">{{ evt.decision }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="card-header mt-3"><span class="card-title">Events</span></div>
+    <p class="empty">No events for this engagement</p>
+  </div>
+  {% endif %}
+</div>

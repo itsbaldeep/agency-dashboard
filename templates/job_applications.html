@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>All Applications</h1>
+  <div class="sub">Track every job application across all campaigns</div>
+</div>
+
+<a href="/jobs" class="btn" style="margin-bottom:16px;">Back to Campaigns</a>
+
+<div class="card">
+  <table style="width:100%;border-collapse:collapse;">
+    <thead>
+      <tr style="border-bottom:1px solid var(--border);text-align:left;">
+        <th style="padding:8px 12px;">Job Title</th>
+        <th style="padding:8px 12px;">Company</th>
+        <th style="padding:8px 12px;">Status</th>
+        <th style="padding:8px 12px;">Resume</th>
+        <th style="padding:8px 12px;">Cover Letter</th>
+        <th style="padding:8px 12px;">Email Sent</th>
+        <th style="padding:8px 12px;">Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in applications %}
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:8px 12px;font-weight:600;">{{ a.title }}</td>
+        <td style="padding:8px 12px;">{{ a.company }}</td>
+        <td style="padding:8px 12px;">
+          <span class="badge badge-{{ 'green' if a.status in ('interviewing', 'offer', 'email_sent') else 'blue' if a.status == 'applied' else 'amber' if a.status in ('preparing', 'resume_ready') else 'red' if a.status == 'rejected' else 'dim' }}">
+            {{ a.status }}
+          </span>
+        </td>
+        <td style="padding:8px 12px;">
+          {% if a.has_resume %}
+          <span class="badge badge-green">Ready</span>
+          {% else %}
+          <span class="badge badge-dim">Pending</span>
+          {% endif %}
+        </td>
+        <td style="padding:8px 12px;">
+          {% if a.has_cover_letter %}
+          <span class="badge badge-green">Ready</span>
+          {% else %}
+          <span class="badge badge-dim">Pending</span>
+          {% endif %}
+        </td>
+        <td style="padding:8px 12px;font-size:12px;">{{ a.email_sent_at.strftime('%Y-%m-%d %H:%M') if a.email_sent_at else 'Not sent' }}</td>
+        <td style="padding:8px 12px;font-size:12px;">{{ a.updated_at.strftime('%Y-%m-%d %H:%M') if a.updated_at else '' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No applications yet. Run a campaign to start.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

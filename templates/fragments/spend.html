@@ -1,0 +1,34 @@
+<div id="spend-main">
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--accent)">${{ "%.6f"|format(spend.totals.total_cost or 0) }}</div>
+      <div class="stat-label">Total Cost</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--text-bright)">{{ spend.totals.total_calls or 0 }}</div>
+      <div class="stat-label">Total Calls</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--green)">{{ (spend.totals.total_tokens_in or 0) + (spend.totals.total_tokens_out or 0) }}</div>
+      <div class="stat-label">Total Tokens</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">By Project</span></div>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Project</th><th>Tasks</th><th>Cost</th></tr>
+      {% for p in spend.by_project %}
+      <tr>
+        <td><strong>{{ p.project_name }}</strong></td>
+        <td>{{ p.total_tasks }}</td>
+        <td class="mono">${{ "%.6f"|format(p.total_cost or 0) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3"><p class="empty">No spend data</p></td></tr>
+      {% endfor %}
+    </table>
+    </div>
+  </div>
+</div>

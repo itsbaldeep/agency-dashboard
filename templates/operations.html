@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Operations</h1>
+  <div class="sub">Jobs &amp; approvals</div>
+</div>
+
+<div class="section-tabs">
+  <a href="#jobs" class="active" onclick="switchTab(event,'jobs')">Jobs</a>
+  <a href="#approvals" onclick="switchTab(event,'approvals')">Approvals</a>
+  <a href="#runs" onclick="switchTab(event,'runs')">Job Runs</a>
+</div>
+
+<div id="tab-jobs" class="tab-content">
+  <div id="jobs-main"
+       hx-get="/operations/jobs"
+       hx-trigger="load, every 10s"
+       hx-select="#jobs-main"
+       hx-swap="outerHTML">
+    <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
+  </div>
+</div>
+
+<div id="tab-approvals" class="tab-content" style="display:none">
+  <div id="approvals-main"
+       hx-get="/operations/approvals"
+       hx-trigger="load, every 10s"
+       hx-select="#approvals-main"
+       hx-swap="outerHTML">
+    <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
+  </div>
+</div>
+
+<div id="tab-runs" class="tab-content" style="display:none">
+  <div id="runs-main"
+       hx-get="/operations/job-runs"
+       hx-trigger="load, every 15s"
+       hx-select="#runs-main"
+       hx-swap="outerHTML">
+    <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
+  </div>
+</div>
+
+<script>
+function switchTab(e,name){e.preventDefault();document.querySelectorAll('.tab-content').forEach(function(t){t.style.display='none'});document.getElementById('tab-'+name).style.display='block';document.querySelectorAll('.section-tabs a').forEach(function(a){a.classList.remove('active')});e.target.classList.add('active')}
+</script>
+{% endblock %}

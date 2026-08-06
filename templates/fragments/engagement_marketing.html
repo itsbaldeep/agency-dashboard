@@ -1,0 +1,184 @@
+<div>
+  <div class="card-header">
+    <span class="card-title">Brand: {{ eng.brand_name or eng.client_name }}</span>
+    <span class="gap-2">
+      {% if eng.brand_properties %}
+        {% for p in eng.brand_properties %}
+          {% if p.property_type == 'domain' %}
+          <a href="https://{{ p.value }}" target="_blank" class="btn btn-sm">Visit Site &#8599;</a>
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+      <button class="btn btn-sm" onclick="document.getElementById('audit-form').style.display='block'">Run Audit</button>
+    </span>
+  </div>
+
+  <div id="audit-form" style="display:none" class="mb-3">
+    <div class="card" style="border-color:var(--accent)">
+      <div class="gap-2 flex-center">
+        <input type="text" id="audit-domain-{{ eng.ref_id }}" placeholder="domain" style="max-width:300px"
+          value="{% for p in eng.brand_properties %}{% if p.property_type=='domain' %}{{ p.value }}{% endif %}{% endfor %}">
+        <button class="btn btn-sm btn-primary" onclick="runAudit({{ eng.ref_id }})">Run Audit</button>
+      </div>
+      <div id="audit-status-{{ eng.ref_id }}" class="mt-1"></div>
+    </div>
+  </div>
+
+  {% if eng.competitors %}
+  <div class="mb-3">
+    <div class="card-title mb-2">Competitors</div>
+    <div class="gap-2">
+      {% for c in eng.competitors %}
+      <span class="badge badge-dim">{{ c.name or c.domain }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if eng.audits %}
+  <div class="mb-3">
+    <div class="card-title mb-2">Audits ({{ eng.audits|length }})</div>
+    {% for a in eng.audits %}
+    {% set s = a.summary or {} %}
+    {% set conf = s.get('confidence','normal') %}
+    <div class="suggestion-card">
+      {% if conf == 'low' %}
+      <div style="background:var(--red-dim);border:1px solid rgba(255,71,87,0.3);border-radius:6px;padding:8px;margin-bottom:8px;font-size:11px">
+        <span style="color:var(--red);font-weight:600">&#9888; Low Confidence</span>
+      </div>
+      {% endif %}
+      <div class="gap-2 flex-center">
+        <span class="mono subtle">{{ a.audit_type }}</span>
+        <span class="mono subtle">{{ a.created_at.strftime('%b %d %H:%M') if a.created_at else '' }}</span>
+        {% if conf == 'low' %}<span class="badge badge-red">low confidence</span>{% endif %}
+      </div>
+      <div class="gap-3 mt-1 subtle">
+        <span>Category: <strong>{{ s.get('category','?') }}</strong></span>
+        <span style="{{ 'opacity:0.4' if conf=='low' else '' }}">
+          Visibility: <strong>{{ s.get('brand_share_of_voice_pct',0) }}%</strong>
+          ({{ s.get('brand_cited_count',0) }}/{{ s.get('prompts_queried',0) }})
+        </span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if eng.suggestions %}
+  <div class="mb-3">
+    <div class="card-header">
+      <span class="card-title">Suggestions</span>
+      <span class="badge badge-amber">{{ eng.suggestions|selectattr('status','equalto','pending')|list|length }} pending</span>
+    </div>
+    {% for s in eng.suggestions %}
+    <div class="suggestion-card" id="sug-{{ s.id }}">
+      <div class="gap-2 flex-center">
+        <span style="font-weight:600;flex:1;font-size:13px;color:var(--text-bright)">{{ s.title }}</span>
+        <span class="badge {{ s.impact or 'low' }}">{{ s.impact or 'low' }}</span>
+        <span class="badge {{ s.effort or 'medium' }}">{{ s.effort or 'medium' }}</span>
+        <span class="badge {{ s.status }}">{{ s.status }}</span>
+      </div>
+      {% if s.rationale %}<div class="subtle mt-1">{{ s.rationale }}</div>{% endif %}
+      {% if s.status == 'pending' %}
+      <div class="mt-2 gap-2">
+        <button class="btn btn-sm btn-green" onclick="approveSug({{ s.id }})">Approve</button>
+        <button class="btn btn-sm btn-red" onclick="rejectSug({{ s.id }})">Reject</button>
+        <button class="btn btn-sm" onclick="generateContent({{ s.id }})">Generate Content</button>
+        <div id="sug-result-{{ s.id }}" class="w-full"></div>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if eng.content_items %}
+  <div class="mb-3">
+    <div class="card-title mb-2">Generated Content</div>
+    {% for ci in eng.content_items %}
+    <div class="suggestion-card">
+      <div class="gap-2 flex-center">
+        <span style="font-weight:600;flex:1;font-size:13px;color:var(--text-bright)">{{ ci.title }}</span>
+        <span class="badge {{ ci.status }}">{{ ci.status }}</span>
+      </div>
+      <div class="mt-2 gap-2">
+        {% if ci.body %}
+        <a href="/content/{{ ci.id }}/download" class="btn btn-sm btn-primary">Download</a>
+        {% endif %}
+        {% if ci.status == 'draft' %}
+        <button class="btn btn-sm btn-green" onclick="approveContent({{ ci.id }})">Approve</button>
+        <button class="btn btn-sm" onclick="regenerateContent({{ ci.id }})">Regenerate</button>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if not eng.brand_properties and not eng.audits and not eng.suggestions %}
+  <div class="card"><p class="empty">No marketing data yet. Run an audit to get started.</p></div>
+  {% endif %}
+</div>
+
+<script>
+async function runAudit(cid) {
+  var domain = document.getElementById('audit-domain-'+cid).value.trim();
+  if (!domain) return;
+  var s = document.getElementById('audit-status-'+cid);
+  s.innerHTML = '<div class="subtle">Starting audit for '+domain+'...</div>';
+  try {
+    var r = await fetch('/api/brands/audit', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'domain='+encodeURIComponent(domain) });
+    var d = await r.json();
+    if (!d.ok) { s.innerHTML = '<div class="subtle" style="color:var(--red)">'+d.error+'</div>'; return; }
+    s.innerHTML = '<div class="subtle">Audit queued (task #'+d.task_id+')...</div>';
+    pollAudit(d.task_id, s);
+  } catch(e) { s.innerHTML = '<div class="subtle" style="color:var(--red)">Error: '+e.message+'</div>'; }
+}
+async function pollAudit(tid, el) {
+  for (var i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      var r = await fetch('/api/tasks/'+tid);
+      var d = await r.json();
+      if (d.status === 'done') { el.innerHTML = '<div class="subtle" style="color:var(--green)">Complete</div>'; location.reload(); return; }
+      else if (d.status === 'failed') { el.innerHTML = '<div class="subtle" style="color:var(--red)">Failed: '+(d.error||'')+'</div>'; return; }
+    } catch(e) { if(i>55) return; }
+  }
+}
+async function approveSug(sid) {
+  await fetch('/api/suggestions/'+sid+'/approve', {method:'POST'});
+  var el = document.getElementById('sug-'+sid); if(el) el.style.opacity='0.5';
+}
+async function rejectSug(sid) {
+  await fetch('/api/suggestions/'+sid+'/reject', {method:'POST'});
+  var el = document.getElementById('sug-'+sid); if(el) el.style.opacity='0.5';
+}
+async function generateContent(sid) {
+  var r = await fetch('/api/suggestions/'+sid+'/generate', {method:'POST'});
+  var d = await r.json();
+  if(d.ok) {
+    var el = document.getElementById('sug-result-'+sid);
+    el.innerHTML = '<div class="subtle">Generating...</div>';
+    pollDraft(sid, el);
+  }
+}
+async function pollDraft(sid, el) {
+  for (var i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2500));
+    try {
+      var r = await fetch('/api/suggestions/'+sid+'/task');
+      var d = await r.json();
+      if (d.status === 'done') { el.innerHTML = '<div class="subtle" style="color:var(--green)">Generated ('+d.tokens+' tok / $'+d.cost+')</div>'; return; }
+      else if (d.status === 'failed') { el.innerHTML = '<div class="subtle" style="color:var(--red)">Failed: '+(d.error||'')+'</div>'; return; }
+    } catch(e) { if(i>25) return; }
+  }
+}
+async function approveContent(ci_id) {
+  await fetch('/content/'+ci_id+'/approve', {method:'POST'});
+  location.reload();
+}
+async function regenerateContent(ci_id) {
+  await fetch('/content/'+ci_id+'/regenerate', {method:'POST'});
+  location.reload();
+}
+</script>

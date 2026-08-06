@@ -1,0 +1,66 @@
+<div id="content-main"
+     hx-get="/content/data"
+     hx-trigger="every 15s"
+     hx-select="#content-main"
+     hx-swap="outerHTML">
+  <div class="card-header"><span class="card-title">Articles ({{ articles|length }})</span></div>
+  {% for ci in articles %}
+  <div class="suggestion-card">
+    <div class="gap-2 flex-center">
+      <span style="flex:1;font-weight:600;font-size:13px;color:var(--text-bright)">{{ ci.title }}</span>
+      <span class="badge badge-dim">{{ ci.content_type }}</span>
+      <span class="badge {{ ci.status }}">{{ ci.status }}</span>
+      <span class="subtle">{{ ci.brand_name }}</span>
+    </div>
+    <div class="mt-2 gap-2">
+      {% if ci.body %}
+      <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
+      {% endif %}
+      {% if ci.status == 'draft' %}
+      <button class="btn btn-sm btn-green" onclick="fetch('/content/{{ ci.id }}/approve',{method:'POST'}).then(function(){location.reload()})">Approve</button>
+      <button class="btn btn-sm" onclick="fetch('/content/{{ ci.id }}/regenerate',{method:'POST'}).then(function(){location.reload()})">Regenerate</button>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card"><p class="empty">No articles yet. Generate from engagement suggestions.</p></div>
+  {% endfor %}
+</div>
+
+<div id="design-main"
+     hx-get="/content/data"
+     hx-trigger="every 15s"
+     hx-select="#design-main"
+     hx-swap="outerHTML"
+     style="display:none">
+  <div class="card-header"><span class="card-title">Designs ({{ designs|length }})</span></div>
+  {% for d in designs %}
+  {% set sj = d.spec_json or {} %}
+  <div class="suggestion-card">
+    <div class="gap-2 flex-center">
+      <span style="flex:1;font-weight:600;font-size:13px;color:var(--text-bright)">{{ sj.get('headline','Design #' ~ d.id) }}</span>
+      <span class="badge {{ d.status }}">{{ d.status }}</span>
+      <span class="subtle">{{ d.project_name }}</span>
+    </div>
+    <div class="mt-1 subtle">{{ d.brief[:120] if d.brief else '' }}</div>
+    <div class="mt-2 gap-2">
+      {% if d.file_path and d.id %}
+      <a href="/design/{{ d.project_name }}/file/{{ d.id }}" target="_blank" class="btn btn-sm">Preview</a>
+      {% endif %}
+      {% if d.status == 'pending' %}
+      <button class="btn btn-sm btn-primary" onclick="approveDesign({{ d.id }})">Render</button>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card"><p class="empty">No designs yet.</p></div>
+  {% endfor %}
+</div>
+
+<script>
+async function approveDesign(vid) {
+  var r = await fetch('/api/design/variations/'+vid+'/approve', {method:'POST'});
+  var d = await r.json();
+  if(d.ok) { location.reload(); }
+}
+</script>

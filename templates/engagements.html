@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Engagements</h1>
+  <div class="sub">Unified view of all clients, projects, and brands</div>
+</div>
+
+<div class="card" style="border-color:var(--accent)">
+  <div class="card-header">
+    <span class="card-title">New Engagement</span>
+  </div>
+  <div class="onboard-form">
+    <div>
+      <div class="subtle mb-2">Type</div>
+      <select id="onboard-type" onchange="updateOnboardForm()">
+        <option value="marketing_only">Marketing Only (audit)</option>
+        <option value="existing_code_marketing">Existing Code + Marketing</option>
+        <option value="clean_slate">Clean Slate (new project)</option>
+      </select>
+    </div>
+    <div>
+      <div class="subtle mb-2" id="onboard-label">Domain</div>
+      <input type="text" id="onboard-input" placeholder="e.g. localfermentco.in">
+    </div>
+    <button class="btn btn-primary" onclick="onboard()">Start</button>
+  </div>
+  <div id="onboard-status" class="mt-2"></div>
+</div>
+
+<div id="eng-list"
+     hx-get="/engagements/data"
+     hx-trigger="load, every 15s"
+     hx-select="#eng-list"
+     hx-swap="outerHTML">
+  <div class="card"><p class="empty">Loading...</p></div>
+</div>
+
+<script>
+function updateOnboardForm() {
+  var t = document.getElementById('onboard-type').value;
+  var l = document.getElementById('onboard-label');
+  var i = document.getElementById('onboard-input');
+  if (t === 'marketing_only') { l.textContent = 'Domain'; i.placeholder = 'e.g. localfermentco.in'; }
+  else if (t === 'existing_code_marketing') { l.textContent = 'Git repo URL'; i.placeholder = 'e.g. github.com/org/repo'; }
+  else { l.textContent = 'Brief description'; i.placeholder = 'e.g. landing page for wellness brand'; }
+}
+async function onboard() {
+  var type = document.getElementById('onboard-type').value;
+  var input = document.getElementById('onboard-input').value.trim();
+  if (!input) { return; }
+  var s = document.getElementById('onboard-status');
+  s.innerHTML = '<div class="card" style="padding:10px;font-size:12px">Starting...</div>';
+  try {
+    var r = await fetch('/onboard', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'type='+encodeURIComponent(type)+'&input='+encodeURIComponent(input) });
+    var d = await r.json();
+    if (!d.ok) { s.innerHTML = '<div class="card" style="padding:10px;font-size:12px;color:var(--red)">'+d.error+'</div>'; return; }
+    if (d.task_id) {
+      s.innerHTML = '<div class="card" style="padding:10px;font-size:12px;color:var(--text-muted)">Queued (task #'+d.task_id+')...</div>';
+      pollTask(d.task_id, d.client_id, d.brand_id, s);
+    } else {
+      s.innerHTML = '<div class="card" style="padding:10px;font-size:12px;color:var(--green)">Created</div>';
+      setTimeout(function(){ htmx.trigger('#eng-list','load'); }, 500);
+    }
+  } catch(e) { s.innerHTML = '<div class="card" style="padding:10px;font-size:12px;color:var(--red)">Error: '+e.message+'</div>'; }
+}
+async function pollTask(tid, cid, bid, el) {
+  for (var i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      var r = await fetch('/api/tasks/'+tid);
+      var d = await r.json();
+      if (d.status === 'done') {
+        el.innerHTML = '<div class="card" style="padding:10px;font-size:12px;color:var(--green)">Complete <a href="/engagements/client/'+cid+'" class="btn btn-sm" style="margin-left:8px">View &rarr;</a></div>';
+        setTimeout(function(){ htmx.trigger('#eng-list','load'); }, 500);
+        return;
+      } else if (d.status === 'failed') {
+        el.innerHTML = '<div class="card" style="padding:10px;font-size:12px;color:var(--red)">Failed: '+(d.error||'unknown')+'</div>';
+        return;
+      }
+    } catch(e) { if(i>55) { el.innerHTML = '<div class="card" style="padding:10px;font-size:12px;color:var(--red)">Timed out</div>'; return; } }
+  }
+}
+</script>
+{% endblock %}

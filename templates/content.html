@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Content</h1>
+  <div class="sub">All generated articles and designs</div>
+</div>
+
+<div class="section-tabs">
+  <a href="#articles" class="active" onclick="switchTab(event,'articles')">Articles</a>
+  <a href="#designs" onclick="switchTab(event,'designs')">Designs</a>
+</div>
+
+<div id="tab-articles" class="tab-content">
+  <div id="content-main"
+       hx-get="/content/data"
+       hx-trigger="load, every 15s"
+       hx-select="#content-main"
+       hx-swap="outerHTML">
+    <div class="card"><div class="skel skel-h"></div><div class="skel skel-s"></div></div>
+  </div>
+</div>
+
+<div id="tab-designs" class="tab-content" style="display:none">
+  <div id="design-main"
+       hx-get="/content/data"
+       hx-trigger="load, every 15s"
+       hx-select="#design-main"
+       hx-swap="outerHTML">
+    <div class="card"><div class="skel skel-h"></div><div class="skel skel-s"></div></div>
+  </div>
+</div>
+
+<script>
+function switchTab(e,name){e.preventDefault();document.querySelectorAll('.tab-content').forEach(function(t){t.style.display='none'});document.getElementById('tab-'+name).style.display='block';document.querySelectorAll('.section-tabs a').forEach(function(a){a.classList.remove('active')});e.target.classList.add('active')}
+</script>
+{% endblock %}

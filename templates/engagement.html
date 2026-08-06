@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="/engagements" style="font-size:12px;color:var(--text-muted)">&larr; Engagements</a>
+<div class="page-header">
+  <h1>{{ eng.client_name or eng.name }}</h1>
+  <div class="sub">
+    <span class="badge {{ eng.onboarding }}">{{ eng.onboarding.replace('_',' ') }}</span>
+    <span class="badge badge-{{ eng.client_status }}">{{ eng.client_status }}</span>
+    {% if eng.project_state %}<span class="badge {{ eng.project_state }}">{{ eng.project_state }}</span>{% endif %}
+    {% if eng.access_tier != '0' %}<span class="badge badge-blue">Tier {{ eng.access_tier }}</span>{% endif %}
+  </div>
+</div>
+
+<div class="section-tabs">
+  <a href="#" class="active" onclick="return switchTab(event,'overview')">Overview</a>
+  {% if eng.has_code %}<a href="#" onclick="return switchTab(event,'code')">Code &amp; Deploy</a>{% endif %}
+  <a href="#" onclick="return switchTab(event,'marketing')">Marketing</a>
+  <a href="#" onclick="return switchTab(event,'activity')">Activity</a>
+</div>
+
+<div id="tab-overview" class="tab-content">
+  {% if eng.intake_params and eng.intake_params is mapping %}
+  <div class="card">
+    <div class="card-title mb-2">Intake</div>
+    <div class="gap-2">
+      {% for k,v in eng.intake_params.items() %}
+      <span class="subtle">{{ k }}: <strong>{{ v }}</strong></span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if eng.has_code and eng.project_id %}
+  <div class="card">
+    <div class="card-title mb-2">Services &amp; Deploy</div>
+    <div id="code-overview" hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/code" hx-trigger="load" hx-swap="innerHTML">
+      <div class="skel skel-h"></div><div class="skel skel-s"></div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if eng.brand_id %}
+  <div class="card">
+    <div class="card-title mb-2">Marketing</div>
+    <div id="mktg-overview" hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/marketing" hx-trigger="load" hx-swap="innerHTML">
+      <div class="skel skel-h"></div><div class="skel skel-s"></div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if not eng.has_code and not eng.brand_id %}
+  <div class="card"><p class="empty">Loading engagement data...</p></div>
+  {% endif %}
+</div>
+
+<div id="tab-code" class="tab-content" style="display:none">
+  {% if eng.has_code and eng.project_id %}
+  <div hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/code" hx-trigger="load" hx-swap="innerHTML">
+    <div class="card"><p class="empty">Loading...</p></div>
+  </div>
+  {% else %}
+  <div class="card"><p class="empty">No code/deploy for this engagement</p></div>
+  {% endif %}
+</div>
+
+<div id="tab-marketing" class="tab-content" style="display:none">
+  {% if eng.brand_id %}
+  <div hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/marketing" hx-trigger="load" hx-swap="innerHTML">
+    <div class="card"><p class="empty">Loading...</p></div>
+  </div>
+  {% else %}
+  <div class="card"><p class="empty">No marketing data for this engagement</p></div>
+  {% endif %}
+</div>
+
+<div id="tab-activity" class="tab-content" style="display:none">
+  <div hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/activity" hx-trigger="load" hx-swap="innerHTML">
+    <div class="card"><p class="empty">Loading activity...</p></div>
+  </div>
+</div>
+
+<script>
+function switchTab(e, name) {
+  e.preventDefault();
+  document.querySelectorAll('.tab-content').forEach(function(t){ t.style.display='none'; });
+  var tab = document.getElementById('tab-'+name);
+  tab.style.display = 'block';
+  tab.querySelectorAll('[hx-get][hx-trigger="load"]').forEach(function(el) {
+    if (!el.hasAttribute('data-loaded')) {
+      el.setAttribute('data-loaded', '');
+      htmx.process(el);
+    }
+  });
+  document.querySelectorAll('.section-tabs a').forEach(function(a){ a.classList.remove('active'); });
+  e.target.classList.add('active');
+  return false;
+}
+</script>
+{% endblock %}

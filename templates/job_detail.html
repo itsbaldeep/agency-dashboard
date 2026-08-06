@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ campaign.name }}</h1>
+  <div class="sub">
+    <span class="badge badge-{{ 'green' if campaign.status == 'active' else 'amber' if campaign.status == 'draft' else 'dim' }}">{{ campaign.status }}</span>
+    &mdash; {{ campaign.target_jobs_per_run }} jobs / {{ campaign.run_interval_hours }}h
+    &mdash; Gmail: <span class="badge badge-{{ 'green' if campaign.gmail_oauth_state == 'authorized' else 'red' }}">{{ campaign.gmail_oauth_state or 'not_setup' }}</span>
+  </div>
+</div>
+
+<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+  <form action="/jobs/{{ campaign.id }}/run" method="post" style="display:inline;" onsubmit="return confirm('Run campaign now? This will search jobs, tailor resumes, generate cover letters, find contacts, and send emails.')">
+    <button class="btn btn-primary">Run Campaign</button>
+  </form>
+  {% if campaign.gmail_oauth_state != 'authorized' %}
+  <a href="/jobs/{{ campaign.id }}/gmail-auth" class="btn">Connect Gmail</a>
+  {% endif %}
+  <a href="/jobs" class="btn">Back to Campaigns</a>
+</div>
+
+<div class="section-tabs" style="margin-bottom:16px;">
+  <button class="tab active" onclick="switchTab('listings')">Listings</button>
+  <button class="tab" onclick="switchTab('applications')">Applications</button>
+  <button class="tab" onclick="switchTab('settings')">Settings</button>
+  <button class="tab" onclick="switchTab('runs')">Run History</button>
+  <button class="tab" onclick="switchTab('emails')">Emails</button>
+</div>
+
+<div id="tab-listings" class="tab-content">
+  <div hx-get="/jobs/{{ campaign.id }}/listings" hx-trigger="load" hx-swap="outerHTML">
+    <div class="skel" style="height:200px;"></div>
+  </div>
+</div>
+
+<div id="tab-applications" class="tab-content" style="display:none;">
+  <div hx-get="/jobs/{{ campaign.id }}/applications" hx-trigger="load" hx-swap="outerHTML">
+    <div class="skel" style="height:200px;"></div>
+  </div>
+</div>
+
+<div id="tab-settings" class="tab-content" style="display:none;">
+  <div class="card" style="max-width:700px;">
+    <form onsubmit="saveSettings(event, {{ campaign.id }})">
+      <div style="margin-bottom:12px;">
+        <label style="display:block;font-weight:600;margin-bottom:4px;">Name</label>
+        <input type="text" name="name" value="{{ campaign.name }}" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="display:block;font-weight:600;margin-bottom:4px;">Status</label>
+        <select name="status" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+          <option value="draft" {{ 'selected' if campaign.status == 'draft' }}>Draft</option>
+          <option value="active" {{ 'selected' if campaign.status == 'active' }}>Active</option>
+          <option value="paused" {{ 'selected' if campaign.status == 'paused' }}>Paused</option>
+          <option value="completed" {{ 'selected' if campaign.status == 'completed' }}>Completed</option>
+        </select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:4px;">Target Jobs Per Run</label>
+          <input type="number" name="target_jobs_per_run" value="{{ campaign.target_jobs_per_run }}" min="1" max="50" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+        </div>
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:4px;">Run Interval (hours)</label>
+          <input type="number" name="run_interval_hours" value="{{ campaign.run_interval_hours }}" min="1" max="168" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+        </div>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="display:block;font-weight:600;margin-bottom:4px;">Resume</label>
+        <textarea name="resume_text" rows="12" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:13px;">{{ campaign.resume_text or '' }}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Settings</button>
+    </form>
+  </div>
+</div>
+
+<div id="tab-runs" class="tab-content" style="display:none;">
+  <div class="card">
+    {% if run_history %}
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);text-align:left;">
+          <th style="padding:8px 12px;">Started</th>
+          <th style="padding:8px 12px;">Status</th>
+          <th style="padding:8px 12px;">Targeted</th>
+          <th style="padding:8px 12px;">Processed</th>
+          <th style="padding:8px 12px;">Apps</th>
+          <th style="padding:8px 12px;">Emails</th>
+          <th style="padding:8px 12px;">LinkedIn</th>
+          <th style="padding:8px 12px;">Errors</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in run_history %}
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:8px 12px;">{{ r.started_at.strftime('%Y-%m-%d %H:%M') if r.started_at else '' }}</td>
+          <td style="padding:8px 12px;">
+            <span class="badge badge-{{ 'green' if r.status == 'completed' else 'red' if r.status == 'failed' else 'amber' }}">{{ r.status }}</span>
+          </td>
+          <td style="padding:8px 12px;">{{ r.jobs_targeted }}</td>
+          <td style="padding:8px 12px;">{{ r.jobs_processed }}</td>
+          <td style="padding:8px 12px;">{{ r.applications_created }}</td>
+          <td style="padding:8px 12px;">{{ r.emails_sent }}</td>
+          <td style="padding:8px 12px;">{{ r.linkedin_notes_sent }}</td>
+          <td style="padding:8px 12px;font-size:11px;color:var(--red);">{{ r.errors[:80] if r.errors else '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No runs yet. Click "Run Campaign" to start.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div id="tab-emails" class="tab-content" style="display:none;">
+  <div class="card">
+    {% if email_threads %}
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);text-align:left;">
+          <th style="padding:8px 12px;">Contact</th>
+          <th style="padding:8px 12px;">Job</th>
+          <th style="padding:8px 12px;">Subject</th>
+          <th style="padding:8px 12px;">Status</th>
+          <th style="padding:8px 12px;">Sent</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in email_threads %}
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:8px 12px;">{{ e.contact_name }}</td>
+          <td style="padding:8px 12px;font-size:12px;">{{ e.job_title }} @ {{ e.company }}</td>
+          <td style="padding:8px 12px;font-size:12px;">{{ e.subject[:50] }}</td>
+          <td style="padding:8px 12px;">
+            <span class="badge badge-{{ 'green' if e.status == 'sent' else 'blue' if e.status == 'opened' else 'amber' if e.status == 'draft' else 'dim' }}">{{ e.status }}</span>
+          </td>
+          <td style="padding:8px 12px;font-size:12px;">{{ e.sent_at.strftime('%Y-%m-%d %H:%M') if e.sent_at else '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No emails yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(function(t) { t.style.display = 'none'; });
+  document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+  document.getElementById('tab-' + name).style.display = 'block';
+  document.querySelector('.tab[onclick*="' + name + '"]').classList.add('active');
+}
+
+async function saveSettings(e, campaignId) {
+  e.preventDefault();
+  var data = new FormData(e.target);
+  var resp = await fetch('/jobs/' + campaignId + '/settings', { method: 'POST', body: data });
+  var result = await resp.json();
+  if (result.ok) {
+    alert('Settings saved.');
+  } else {
+    alert('Error: ' + (result.error || 'Unknown'));
+  }
+}
+</script>
+{% endblock %}

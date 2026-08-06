@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>System Map</h1>
+  <div class="sub">Architecture overview, live data</div>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-title">Task Types</span></div>
+  {% for name, desc in system.task_types.items() %}
+  <div class="suggestion-card">
+    <strong style="font-size:13px;color:var(--text-bright)">{{ name }}</strong>
+    <div class="subtle mt-1">{{ desc }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-title">Background Jobs</span></div>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Name</th><th>Schedule</th><th>Enabled</th><th>Approval Required</th></tr>
+    {% for j in system.jobs %}
+    <tr>
+      <td><strong>{{ j.name }}</strong></td>
+      <td class="mono">{{ j.schedule }}</td>
+      <td><span class="badge {% if j.enabled %}badge-green{% else %}badge-dim{% endif %}">{{ 'Yes' if j.enabled else 'No' }}</span></td>
+      <td><span class="badge {% if j.requires_approval %}badge-amber{% else %}badge-dim{% endif %}">{{ 'Yes' if j.requires_approval else 'No' }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-title">Database Tables ({{ system.tables|length }})</span></div>
+  <div class="gap-2">
+  {% for t in system.tables %}
+    <span class="badge badge-dim mono">{{ t }}</span>
+  {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-title">Docker Networks</span></div>
+  <div class="gap-2">
+  {% for n in system.networks %}
+    <span class="badge badge-blue mono">{{ n }}</span>
+  {% else %}
+    <p class="empty">No project networks</p>
+  {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-title">Skills ({{ system.skills|length }})</span></div>
+  <div class="gap-2">
+  {% for s in system.skills %}
+    <span class="badge badge-purple">{{ s }}</span>
+  {% else %}
+    <p class="empty">No skills installed</p>
+  {% endfor %}
+  </div>
+</div>
+
+{% if system.adminer_port %}
+<div class="card">
+  <div class="card-header"><span class="card-title">Consoles</span></div>
+  <div class="gap-2">
+    <a href="/consoles/pg" target="_blank" class="btn btn-sm">Adminer (Postgres)</a>
+    <a href="/consoles/ch" target="_blank" class="btn btn-sm">ClickHouse Play</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

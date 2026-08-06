@@ -1,0 +1,40 @@
+services:
+  dashboard:
+    build: .
+    container_name: agency-dashboard
+    restart: unless-stopped
+    networks:
+      - net-control
+    ports:
+      - "100.64.0.1:5001:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /home/agency/agency-os/caddy-apps:/caddy-apps:ro
+    env_file: /home/agency/agency-os/.env
+    environment:
+      DB_HOST: agency-postgres
+      DB_NAME: agencyos
+      DB_USER: agency
+      CH_HOST: agency-clickhouse
+      CH_USER: agency
+      BIND_HOST: "0.0.0.0"
+      BIND_PORT: "80"
+      ADMINER_PORT: "5002"
+
+  adminer:
+    image: adminer:latest
+    container_name: agency-adminer
+    restart: unless-stopped
+    mem_limit: 64m
+    networks:
+      - net-control
+    ports:
+      - "100.64.0.1:5002:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: agency-postgres
+      ADMINER_DEFAULT_DB: agencyos
+      ADMINER_DESIGN: nette
+
+networks:
+  net-control:
+    external: true

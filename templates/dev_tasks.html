@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Dev Tasks</h1>
+  <div class="sub">propose_fix — automated code changes via GitHub PR</div>
+</div>
+
+<div class="card" style="border-color:var(--accent)">
+  <div class="card-title mb-2">Create Dev Task</div>
+  <div class="onboard-form">
+    <div>
+      <div class="subtle mb-2">Repo</div>
+      <select id="dev-repo">
+        {% for r in repos %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <div class="subtle mb-2">Description</div>
+      <input type="text" id="dev-desc" placeholder="e.g. add dark mode toggle">
+    </div>
+    <button class="btn btn-primary" onclick="createDevTask()">Create</button>
+  </div>
+  <div id="dev-status" class="mt-2"></div>
+</div>
+
+<div class="card">
+  <div class="card-title mb-2">Task History</div>
+  <div class="table-wrap">
+  <table>
+    <tr><th>ID</th><th>Repo</th><th>Description</th><th>Status</th><th>PR</th><th>Tokens</th><th>Cost</th><th>Created</th><th></th></tr>
+    {% for t in tasks %}
+    {% set pr = t.pr_data %}
+    <tr>
+      <td class="mono">#{{ t.id }}</td>
+      <td><span class="badge badge-dim">{{ pr.repo or t.params|jsonloads('repo') or '-' }}</span></td>
+      <td class="truncate" style="max-width:250px">{{ pr.description or '' }}</td>
+      <td><span class="badge {{ t.status }}">{{ t.status }}</span></td>
+      <td>{% if pr and pr.pr_url %}<a href="{{ pr.pr_url }}" target="_blank" style="font-size:11px">PR &#8599;</a>{% else %}<span class="dim">-</span>{% endif %}</td>
+      <td class="mono">{{ (t.prompt_tokens or 0)+(t.completion_tokens or 0) }}</td>
+      <td class="mono">${{ "%.6f"|format(t.cost or 0) }}</td>
+      <td class="mono subtle">{{ t.created_at[:16] if t.created_at else '' }}</td>
+      <td>{% if t.status == 'done' and pr and pr.pr_url %}<button class="btn btn-xs btn-green" onclick="mergePR({{ t.id }})">Merge</button>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="9"><p class="empty">No dev tasks yet</p></td></tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+
+<script>
+async function createDevTask() {
+  var repo = document.getElementById('dev-repo').value;
+  var desc = document.getElementById('dev-desc').value.trim();
+  if (!desc) return;
+  var s = document.getElementById('dev-status');
+  s.innerHTML = '<div class="subtle">Creating task...</div>';
+  try {
+    var r = await fetch('/api/dev-tasks/create', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'repo='+encodeURIComponent(repo)+'&description='+encodeURIComponent(desc) });
+    var d = await r.json();
+    if (d.ok) {
+      s.innerHTML = '<div class="subtle" style="color:var(--green)">Created task #'+d.task_id+'</div>';
+      setTimeout(function(){ location.reload(); }, 1000);
+    } else { s.innerHTML = '<div class="subtle" style="color:var(--red)">'+d.error+'</div>'; }
+  } catch(e) { s.innerHTML = '<div class="subtle" style="color:var(--red)">Error: '+e.message+'</div>'; }
+}
+async function mergePR(tid) {
+  if (!confirm('Merge this PR?')) return;
+  var r = await fetch('/api/dev-tasks/'+tid+'/merge', {method:'POST'});
+  var d = await r.json();
+  if (d.ok) { location.reload(); }
+  else { alert('Merge failed: '+d.error); }
+}
+</script>
+{% endblock %}

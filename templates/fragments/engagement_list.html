@@ -1,0 +1,24 @@
+<div id="eng-list"
+     hx-get="/engagements/data"
+     hx-trigger="every 15s"
+     hx-select="#eng-list"
+     hx-swap="outerHTML">
+{% for e in engagements %}
+<a href="/engagements/{{ e.ref_type }}/{{ e.ref_id }}" class="eng-card">
+  <div class="eng-card-top">
+    <span class="eng-card-name">{{ e.name }}</span>
+    <span class="badge badge-{{ e.client_status }}">{{ e.client_status }}</span>
+    <span class="badge {{ e.onboarding }}">{{ e.onboarding.replace('_',' ') }}</span>
+    {% if e.project_state %}<span class="badge {{ e.project_state }}">{{ e.project_state }}</span>{% endif %}
+  </div>
+  <div class="eng-card-detail">
+    {% if e.brand_name %}<span>Brand: {{ e.brand_name }}</span>{% endif %}
+    {% if e.project_name %}<span>Project: {{ e.project_name }}</span>{% endif %}
+    {% if e.has_code and e.repo_url %}<span class="mono">{{ e.repo_url }}</span>{% endif %}
+    <span>{{ e.created_at.strftime('%b %d %Y') if e.created_at else '' }}</span>
+  </div>
+</a>
+{% else %}
+<div class="card"><p class="empty">No engagements yet. Create one above.</p></div>
+{% endfor %}
+</div>

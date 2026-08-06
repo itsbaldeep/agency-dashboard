@@ -1,0 +1,61 @@
+{% set mem = data.memory %}
+{% set cpu = data.cpu %}
+{% set disk = data.disk %}
+{% set mp = mem.used_perc.rstrip('%')|int if mem else 0 %}
+{% set dp = disk.use_perc.rstrip('%')|float if disk else 0 %}
+{% set mcol = 'var(--green)' if mp < 50 else ('var(--amber)' if mp < 80 else 'var(--red)') %}
+{% set dcol = 'var(--green)' if dp < 50 else ('var(--amber)' if dp < 85 else 'var(--red)') %}
+<div id="overview-main"
+     hx-get="/dashboard/data"
+     hx-trigger="every 15s"
+     hx-select="#overview-main"
+     hx-swap="outerHTML">
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-value" style="color:{{ mcol }}">{{ mem.used_perc if mem else '--' }}</div>
+      <div class="stat-label">RAM</div>
+      <div class="stat-sub">{{ mem.used_gb }}/{{ mem.total_gb }} GB</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:{{ dcol }}">{{ disk.use_perc if disk else '--' }}</div>
+      <div class="stat-label">Disk</div>
+      <div class="stat-sub">{{ disk.used }}/{{ disk.size }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--accent)">{{ cpu.load_1m if cpu else '--' }}</div>
+      <div class="stat-label">CPU Load</div>
+      <div class="stat-sub">1m avg</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--accent)">{{ data.pending_approvals }}</div>
+      <div class="stat-label">Approvals</div>
+      <div class="stat-sub">pending</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:var(--green)">{{ data.project_count }}</div>
+      <div class="stat-label">Engagements</div>
+      <div class="stat-sub">{{ data.client_count }} clients</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:{{ 'var(--amber)' if data.queued_tasks > 0 else 'var(--green)' }}">
+        {{ data.running_tasks }}{% if data.queued_tasks > 0 %}+{{ data.queued_tasks }}{% endif %}
+      </div>
+      <div class="stat-label">Tasks</div>
+      <div class="stat-sub">running + queued</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Events</span></div>
+    <div class="timeline">
+      {% for evt in data.events %}
+      <div class="event">
+        <span class="ts">{{ evt.ts[:19] if evt.ts else '' }}</span>
+        <span class="action">{{ evt.action }}</span>
+        {% if evt.session_id %}<span class="badge badge-dim" style="font-size:9px">{{ evt.session_id[:8] }}</span>{% endif %}
+        <span class="detail">{{ evt.detail[:150] if evt.detail else '' }}</span>
+      </div>
+      {% else %}<p class="empty">No events yet</p>{% endfor %}
+    </div>
+  </div>
+</div>

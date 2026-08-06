@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="/engagements" style="font-size:12px;color:var(--text-muted)">&larr; Engagements</a>
+<div class="page-header">
+  <h1>Design Variations — {{ project_slug }}</h1>
+</div>
+
+{% for v in variations %}
+{% set sj = v.spec_json %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Variation {{ v.spec_index + 1 }}</span>
+    <span class="gap-2">
+      <span class="badge {{ v.status }}">{{ v.status }}</span>
+    </span>
+  </div>
+  {% if sj %}
+  <div class="gap-3 mt-1">
+    {% if sj.headline %}<span class="subtle"><strong>Headline:</strong> {{ sj.headline }}</span>{% endif %}
+    {% if sj.palette %}<span class="subtle"><strong>Palette:</strong> {{ sj.palette }}</span>{% endif %}
+    {% if sj.layout %}<span class="subtle"><strong>Layout:</strong> {{ sj.layout }}</span>{% endif %}
+    {% if sj.mood %}<span class="subtle"><strong>Mood:</strong> {{ sj.mood }}</span>{% endif %}
+  </div>
+  {% if sj.rationale %}<div class="subtle mt-1">{{ sj.rationale[:200] }}</div>{% endif %}
+  {% endif %}
+  {% if v.file_path and v.id %}
+  <div class="mt-2 gap-2">
+    <a href="/design/{{ project_slug }}/file/{{ v.id }}" target="_blank" class="btn btn-sm btn-primary">Preview</a>
+  </div>
+  {% endif %}
+  {% if v.status == 'pending' %}
+  <div class="mt-2">
+    <button class="btn btn-sm btn-primary" onclick="approveVar({{ v.id }})">Render This</button>
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<div class="card"><p class="empty">No design variations</p></div>
+{% endfor %}
+
+<script>
+async function approveVar(vid) {
+  var r = await fetch('/api/design/variations/'+vid+'/approve', {method:'POST'});
+  var d = await r.json();
+  if (d.ok) { location.reload(); }
+}
+</script>
+{% endblock %}

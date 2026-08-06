@@ -1,0 +1,59 @@
+<div id="health-main"
+     hx-get="/health/data"
+     hx-trigger="every 15s"
+     hx-select="#health-main"
+     hx-swap="outerHTML">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Services</span></div>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Service</th><th>Project</th><th>Type</th><th>Port</th><th>Status</th></tr>
+      {% for s in health.services %}
+      <tr>
+        <td><strong>{{ s.name }}</strong></td>
+        <td class="subtle">{{ s.project_name }}</td>
+        <td class="subtle">{{ s.kind }}</td>
+        <td class="mono">{% if s.port %}{{ s.port }}{% else %}-{% endif %}</td>
+        <td><span class="badge {{ s.status }}">{{ s.status }}</span></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5"><p class="empty">No services</p></td></tr>
+      {% endfor %}
+    </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Health Checks (last 30)</span></div>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Time</th><th>Service</th><th>Status</th><th>Detail</th></tr>
+      {% for c in health.checks %}
+      <tr>
+        <td class="mono subtle">{{ c.ts.strftime('%m/%d %H:%M:%S') if c.ts else '' }}</td>
+        <td>#{{ c.service_id }}</td>
+        <td><span class="badge {% if c.healthy %}badge-green{% else %}badge-red{% endif %}">{{ 'OK' if c.healthy else 'FAIL' }}</span></td>
+        <td class="subtle">{{ c.detail[:100] if c.detail else '' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4"><p class="empty">No checks yet</p></td></tr>
+      {% endfor %}
+    </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Recent Events</span></div>
+    <div class="timeline">
+    {% for evt in events %}
+    <div class="event">
+      <span class="ts">{{ evt.ts[:19] if evt.ts else '' }}</span>
+      <span class="action">{{ evt.action }}</span>
+      <span class="detail">{{ evt.detail[:120] if evt.detail else '' }}</span>
+    </div>
+    {% else %}
+    <p class="empty">No events</p>
+    {% endfor %}
+    </div>
+  </div>
+</div>

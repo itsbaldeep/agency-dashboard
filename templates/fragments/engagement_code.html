@@ -1,0 +1,46 @@
+<div>
+  <div class="card-header"><span class="card-title">Services &amp; Deploy</span></div>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Service</th><th>Type</th><th>Status</th><th>Port</th><th>CPU</th><th>RAM</th><th>URL</th></tr>
+    {% for svc in eng.services %}
+    {% set s = svc.docker %}
+    {% set cp = s.CPUPerc.rstrip('%')|float if s else 0 %}
+    {% set mp = s.MemPerc.rstrip('%')|float if s else 0 %}
+    <tr>
+      <td><strong>{{ svc.name }}</strong></td>
+      <td class="subtle">{{ svc.kind }}</td>
+      <td><span class="badge {{ svc.status }}">{{ svc.status }}</span></td>
+      <td>{% if svc.port %}<a href="http://100.64.0.1:{{ svc.port }}" class="mono" target="_blank">{{ svc.port }}</a>{% else %}<span class="mono dim">-</span>{% endif %}</td>
+      <td><span class="mono">{{ s.CPUPerc if s else '-' }}</span></td>
+      <td><span class="mono">{{ s.MemUsage.split(' /')[0] if s else '-' }}</span></td>
+      <td>{% if svc.hostname %}<a href="{{ svc.hostname }}" target="_blank" style="font-size:11px">{{ svc.hostname.replace('https://','') }}</a>{% else %}<span class="dim">-</span>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7"><p class="empty">No services</p></td></tr>
+    {% endfor %}
+  </table>
+  </div>
+
+  {% if eng.dns_records %}
+  <div class="card-title mt-3 mb-2">DNS Records</div>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Subdomain</th><th>Target</th><th>State</th></tr>
+    {% for d in eng.dns_records %}
+    <tr>
+      <td class="mono">{{ d.subdomain }}.apps.deployden.tech</td>
+      <td class="mono">{{ d.target_service or '-' }}</td>
+      <td><span class="badge {{ d.state }}">{{ d.state }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% endif %}
+
+  {% if eng.repo_url %}
+  <div class="mt-2 gap-2">
+    <a href="{{ eng.repo_url }}" target="_blank" class="btn btn-sm">View Repo &#8599;</a>
+  </div>
+  {% endif %}
+</div>

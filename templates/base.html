@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agency OS{% if title %} — {{ title }}{% endif %}</title>
+<script src="/static/htmx.min.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <div class="logo">A</div>
+    <span>Agency OS</span>
+  </div>
+  <div class="sidebar-nav">
+    <div class="sidebar-section">Core</div>
+    <a href="/dashboard" class="{% if active == 'dashboard' %}active{% endif %}">
+      <span class="nav-icon">&#9632;</span> Dashboard
+    </a>
+    <a href="/engagements" class="{% if active == 'engagements' %}active{% endif %}">
+      <span class="nav-icon">&#9670;</span> Engagements
+    </a>
+    <a href="/content" class="{% if active == 'content' %}active{% endif %}">
+      <span class="nav-icon">&#9998;</span> Content
+    </a>
+    <a href="/jobs" class="{% if active == 'jobs' %}active{% endif %}">
+      <span class="nav-icon">&#9654;</span> Jobs
+    </a>
+
+    <div class="sidebar-section">Operations</div>
+    <a href="/operations" class="{% if active == 'operations' %}active{% endif %}">
+      <span class="nav-icon">&#9881;</span> Operations
+    </a>
+    <a href="/health" class="{% if active == 'health' %}active{% endif %}">
+      <span class="nav-icon">&#9829;</span> Health
+    </a>
+    <a href="/dev-tasks" class="{% if active == 'dev-tasks' %}active{% endif %}">
+      <span class="nav-icon">&#9003;</span> Dev Tasks
+    </a>
+
+    <div class="sidebar-section">Analytics</div>
+    <a href="/spend" class="{% if active == 'spend' %}active{% endif %}">
+      <span class="nav-icon">&#36;</span> Spend
+    </a>
+    <a href="/resources" class="{% if active == 'resources' %}active{% endif %}">
+      <span class="nav-icon">&#9776;</span> Resources
+    </a>
+
+    <div class="sidebar-section">System</div>
+    <a href="/system-map" class="{% if active == 'system-map' %}active{% endif %}">
+      <span class="nav-icon">&#8704;</span> System Map
+    </a>
+  </div>
+  <div class="sidebar-footer">
+    <a href="/consoles/pg"><span class="nav-icon">&#8694;</span> Adminer</a>
+    <a href="/consoles/ch"><span class="nav-icon">&#9654;</span> CH Play</a>
+  </div>
+</nav>
+
+<button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()">&#9776;</button>
+<button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle theme">&#9790;</button>
+
+<div class="main" id="main">
+  {% block content %}{{ content|safe }}{% endblock %}
+</div>
+
+<script>
+(function() {
+  var t = localStorage.getItem('theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  if (t === 'light') document.getElementById('themeToggle').innerHTML = '&#9790;';
+  else document.getElementById('themeToggle').innerHTML = '&#9788;';
+})();
+function toggleTheme() {
+  var h = document.documentElement;
+  var cur = h.getAttribute('data-theme');
+  var next = cur === 'dark' ? 'light' : 'dark';
+  h.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  document.getElementById('themeToggle').innerHTML = next === 'light' ? '&#9788;' : '&#9790;';
+}
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+}
+document.addEventListener('click', function(e) {
+  var s = document.getElementById('sidebar');
+  var t = document.getElementById('menuToggle');
+  if (window.innerWidth <= 820 && !s.contains(e.target) && !t.contains(e.target)) {
+    s.classList.remove('open');
+  }
+});
+function setPoll(el, target, url) {
+  var val = el.value;
+  var t = document.getElementById(target);
+  t.setAttribute('hx-trigger', 'load, every ' + val + 's');
+  t.setAttribute('hx-get', url + '?poll=' + val);
+  htmx.process(t);
+}
+</script>
+</body>
+</html>

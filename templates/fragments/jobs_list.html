@@ -1,0 +1,29 @@
+<div id="jobs-main"
+     hx-get="/operations/jobs"
+     hx-trigger="every 10s"
+     hx-select="#jobs-main"
+     hx-swap="outerHTML">
+  <div class="card-header"><span class="card-title">Background Jobs</span></div>
+  {% for j in jobs %}
+  <div class="job-row">
+    <div>
+      <strong style="font-size:13px;color:var(--text-bright)">{{ j.name }}</strong>
+      <div class="subtle">{{ j.schedule }}</div>
+    </div>
+    <span class="badge {% if j.enabled %}badge-green{% else %}badge-dim{% endif %}">{{ 'ON' if j.enabled else 'OFF' }}</span>
+    <span class="subtle">{{ j.completed or 0 }} ok</span>
+    <span class="subtle">{{ j.failed or 0 }} fail</span>
+    <span class="subtle">{{ j.last_run.strftime('%H:%M') if j.last_run else 'never' }}</span>
+    <div class="gap-2">
+      <button class="btn btn-xs" onclick="toggleJob({{ j.id }})">{{ 'Pause' if j.enabled else 'Start' }}</button>
+      <button class="btn btn-xs" onclick="runJob({{ j.id }})">Run</button>
+    </div>
+  </div>
+  {% else %}
+  <p class="empty">No jobs defined</p>
+  {% endfor %}
+</div>
+<script>
+async function toggleJob(jid){await fetch('/operations/jobs/'+jid+'/toggle',{method:'POST'});setTimeout(function(){htmx.trigger('#jobs-main','load')},200)}
+async function runJob(jid){await fetch('/operations/jobs/'+jid+'/run',{method:'POST'});setTimeout(function(){htmx.trigger('#jobs-main','load')},200)}
+</script>

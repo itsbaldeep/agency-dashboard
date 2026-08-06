@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Spend</h1>
+  <div class="sub">LLM token usage &amp; cost tracking</div>
+</div>
+
+<div id="spend-main"
+     hx-get="/spend/data"
+     hx-trigger="load"
+     hx-select="#spend-main"
+     hx-swap="outerHTML">
+  <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
+</div>
+{% endblock %}

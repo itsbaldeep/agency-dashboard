@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Health</h1>
+  <div class="sub">Service status &amp; health checks</div>
+</div>
+
+<div id="health-main"
+     hx-get="/health/data"
+     hx-trigger="load, every 15s"
+     hx-select="#health-main"
+     hx-swap="outerHTML">
+  <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
+</div>
+{% endblock %}

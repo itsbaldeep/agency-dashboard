@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>New Job Campaign</h1>
+  <div class="sub">Set up an automated job search campaign</div>
+</div>
+
+<div class="card">
+  <form id="newCampaignForm" onsubmit="submitCampaign(event)" style="max-width:700px;">
+    <div style="margin-bottom:16px;">
+      <label style="display:block;font-weight:600;margin-bottom:4px;">Campaign Name *</label>
+      <input type="text" name="name" required style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;" placeholder="e.g., Remote SWE Q3 2026">
+    </div>
+
+    <div style="margin-bottom:16px;">
+      <label style="display:block;font-weight:600;margin-bottom:4px;">Job Titles (comma separated)</label>
+      <input type="text" name="job_titles" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;" placeholder="Software Engineer, Senior Developer, SRE">
+    </div>
+
+    <div style="margin-bottom:16px;">
+      <label style="display:block;font-weight:600;margin-bottom:4px;">Locations (comma separated)</label>
+      <input type="text" name="locations" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;" placeholder="Remote, San Francisco, New York">
+    </div>
+
+    <div style="margin-bottom:16px;">
+      <label style="display:block;font-weight:600;margin-bottom:4px;">Resume / CV *</label>
+      <textarea name="resume_text" rows="15" required style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:13px;" placeholder="Paste your full resume here - name, contact, summary, experience, education, certifications, skills..."></textarea>
+      <div style="font-size:11px;color:var(--dim);margin-top:4px;">Include ALL details: name, email, phone, location, experience, education, certifications. This is the base resume that will be tailored per job.</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div>
+        <label style="display:block;font-weight:600;margin-bottom:4px;">Target Jobs Per Run</label>
+        <input type="number" name="target_jobs_per_run" value="10" min="1" max="50" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+      </div>
+      <div>
+        <label style="display:block;font-weight:600;margin-bottom:4px;">Run Interval (hours)</label>
+        <input type="number" name="run_interval_hours" value="24" min="1" max="168" style="width:100%;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+      </div>
+    </div>
+
+    <div>
+      <button type="submit" class="btn btn-primary">Create Campaign</button>
+      <a href="/jobs" class="btn" style="margin-left:8px;">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+async function submitCampaign(e) {
+  e.preventDefault();
+  var form = e.target;
+  var data = new FormData(form);
+  var btn = form.querySelector('button[type=submit]');
+  btn.disabled = true;
+  btn.textContent = 'Creating...';
+  try {
+    var resp = await fetch('/jobs/new', { method: 'POST', body: data });
+    var result = await resp.json();
+    if (result.ok) {
+      window.location.href = '/jobs/' + result.campaign_id;
+    } else {
+      alert('Error: ' + (result.error || 'Unknown error'));
+      btn.disabled = false;
+      btn.textContent = 'Create Campaign';
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Create Campaign';
+  }
+}
+</script>
+{% endblock %}
