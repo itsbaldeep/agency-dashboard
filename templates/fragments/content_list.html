@@ -14,6 +14,7 @@
     </div>
     <div class="mt-2 gap-2">
       {% if ci.body %}
+      <a href="/content/{{ ci.id }}/preview" target="_blank" class="btn btn-sm">Preview</a>
       <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
       {% endif %}
       {% if ci.status == 'draft' %}
