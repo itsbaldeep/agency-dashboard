@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ project['name'] }}</h1>
+  <div class="sub">
+    {{ project['repo_name'] or '—' }} &middot; {{ project['base_branch'] or '—' }}
+    <span class="badge {{ 'ok' if project['agent_allowed'] else 'no' }}">{% if project['agent_allowed'] %}agent{% else %}no-agent{% endif %}</span>
+    {% if project['repo_url'] %}
+      <a href="{{ project['repo_url'] }}" target="_blank" rel="noopener">{{ 'Website' if not project['agent_allowed'] else 'Repository' }}</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-title mb-2">Capabilities</div>
+  {% if caps %}
+  <table>
+    <tr><th class="subtle">Capability</th><th class="subtle">Status</th><th class="subtle">Last audited</th><th class="subtle">Evidence</th></tr>
+    {% for c in caps %}
+    <tr>
+      <td>{{ c['capability'] }}</td>
+      <td><span class="badge {{ c['status'] }}">{{ c['status'] }}</span></td>
+      <td>{{ c['checked_at'] or '' }}</td>
+      <td>{{ c['evidence'] or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No capabilities recorded.</p>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-title mb-2">Latest Audit</div>
+  {% if latest_audit and latest_audit['result_ref'] %}
+  <pre style="white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:monospace;font-size:12px;margin:0;">{{ latest_audit['result_ref'] }}</pre>
+  {% else %}
+  <p class="empty">No audit yet.</p>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-title mb-2">Content</div>
+  {% if content_items %}
+  <div class="card-list">
+    {% for ci in content_items %}
+    <div class="card-list-item">
+      <div class="card-list-main">
+        <a href="/content/{{ ci['id'] }}/preview">{{ ci['title'] }}</a>
+        <span class="badge {{ ci['status'] }}">{{ ci['status'] }}</span>
+      </div>
+      <div class="card-list-sub">{{ ci['type'] or '' }} &middot; {{ ci['created_at'] or '' }} &middot; <a href="/content/{{ ci['id'] }}/preview">Preview</a></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No content yet.</p>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-title mb-2">Dev Activity</div>
+  {% if dev_activity %}
+  <div class="card-list">
+    {% for t in dev_activity %}
+    <div class="card-list-item">
+      <div class="card-list-main"><a href="/tasks/{{ t['id'] }}">#{{ t['id'] }}</a> <span class="badge {{ t['status'] }}">{{ t['status'] }}</span></div>
+      <div class="card-list-sub">{{ t['gist'] or '—' }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No dev activity yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-title mb-2">Pending</div>
+  {% if pending %}
+  <div class="card-list">
+    {% for s in pending %}
+    <div class="card-list-item">
+      <div class="card-list-main">{{ s['title'] }} <span class="badge {{ s['status'] }}">{{ s['status'] }}</span></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No pending suggestions.</p>
+  {% endif %}
+</div>
+
+<a href="/projects" class="btn">&larr; Back to Projects</a>
+{% endblock %}

@@ -34,7 +34,7 @@
   <div class="card-list">
     {% for p in projects %}
     <div class="card-list-item">
-      <div class="card-list-main">{{ p['name'] }}</div>
+      <div class="card-list-main"><a href="/projects/{{ p['id'] }}" style="color:inherit;text-decoration:none;">{{ p['name'] }}</a></div>
       <div class="card-list-sub">{{ p['repo_name'] or '—' }} &middot; {{ p['base_branch'] or '—' }} &middot; {{ 'agent' if p['agent_allowed'] else 'no-agent' }}</div>
     </div>
     {% else %}
