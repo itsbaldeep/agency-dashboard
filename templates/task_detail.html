@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Task #{{ t.id }}</h1>
+  <div class="sub">
+    <span class="badge {{ t.type }}">{{ t.type }}</span>
+    <span class="badge {{ t.status }}">{{ t.status }}</span>
+    &mdash; triggered by {{ t.triggered_by or 'system' }}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title mb-2">Details</div>
+  <table>
+    <tr><th class="subtle">Type</th><td>{{ t.type }}</td></tr>
+    <tr><th class="subtle">Status</th><td><span class="badge {{ t.status }}">{{ t.status }}</span></td></tr>
+    <tr><th class="subtle">Triggered By</th><td>{{ t.triggered_by or '' }}</td></tr>
+    <tr><th class="subtle">Created</th><td>{{ t.created_at or '' }}</td></tr>
+    <tr><th class="subtle">Started</th><td>{{ t.started_at or '' }}</td></tr>
+    <tr><th class="subtle">Finished</th><td>{{ t.finished_at or '' }}</td></tr>
+    <tr><th class="subtle">Prompt Tokens</th><td>{{ t.prompt_tokens or 0 }}</td></tr>
+    <tr><th class="subtle">Completion Tokens</th><td>{{ t.completion_tokens or 0 }}</td></tr>
+    <tr><th class="subtle">Cost</th><td>${{ "%.6f"|format(t.cost or 0) }}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-title mb-2">Params</div>
+  <pre style="white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:monospace;font-size:12px;margin:0;">{{ t.params_pretty }}</pre>
+</div>
+
+{% if t.error %}
+<div class="card">
+  <div class="card-title mb-2">Error</div>
+  <pre style="white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:monospace;font-size:12px;margin:0;">{{ t.error }}</pre>
+</div>
+{% endif %}
+
+{% if t.result_ref %}
+<div class="card">
+  <div class="card-title mb-2">Result</div>
+  <pre style="white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:monospace;font-size:12px;margin:0;">{{ t.result_ref }}</pre>
+</div>
+{% endif %}
+
+<a href="/tasks" class="btn">&larr; Back to Tasks</a>
+{% endblock %}
