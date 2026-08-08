@@ -276,13 +276,14 @@ def project_onboard():
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO tasks (type, status, params, triggered_by) "
-            "VALUES ('onboard_project', 'queued', %s, 'dashboard')", (params,))
+            "VALUES ('onboard_project', 'queued', %s, 'dashboard') RETURNING id", (params,))
+        task_id = cur.fetchone()["id"]
         conn.commit()
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     finally:
         conn.close()
-    return redirect("/projects")
+    return redirect("/tasks/%d" % task_id)
 
 
 # ── Per-project actions (audit / draft / fix) ──────────────────
@@ -299,11 +300,12 @@ def project_audit(project_id):
         params = json.dumps({"project_id": project_id, "url": row["repo_url"]})
         cur.execute(
             "INSERT INTO tasks (type, status, params, triggered_by) "
-            "VALUES ('defend_audit', 'queued', %s, 'dashboard')", (params,))
+            "VALUES ('defend_audit', 'queued', %s, 'dashboard') RETURNING id", (params,))
+        task_id = cur.fetchone()["id"]
         conn.commit()
     finally:
         conn.close()
-    return redirect("/projects/%d" % project_id)
+    return redirect("/tasks/%d" % task_id)
 
 
 @app.route("/projects/<int:project_id>/draft", methods=["POST"])
@@ -336,11 +338,12 @@ def project_draft(project_id):
             params["model"] = model
         cur.execute(
             "INSERT INTO tasks (type, status, params, triggered_by) "
-            "VALUES ('generate_draft', 'queued', %s, 'dashboard')", (json.dumps(params),))
+            "VALUES ('generate_draft', 'queued', %s, 'dashboard') RETURNING id", (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
         conn.commit()
     finally:
         conn.close()
-    return redirect("/projects/%d" % project_id)
+    return redirect("/tasks/%d" % task_id)
 
 
 @app.route("/projects/<int:project_id>/fix", methods=["POST"])
@@ -356,11 +359,12 @@ def project_fix(project_id):
         params = json.dumps({"repo": row["repo_name"], "description": description, "source": "dashboard"})
         cur.execute(
             "INSERT INTO tasks (type, status, params, triggered_by) "
-            "VALUES ('propose_fix', 'queued', %s, 'dashboard')", (params,))
+            "VALUES ('propose_fix', 'queued', %s, 'dashboard') RETURNING id", (params,))
+        task_id = cur.fetchone()["id"]
         conn.commit()
     finally:
         conn.close()
-    return redirect("/projects/%d" % project_id)
+    return redirect("/tasks/%d" % task_id)
 
 
 # ── Content ─────────────────────────────────────────────────────
