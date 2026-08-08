@@ -760,6 +760,46 @@ def dev_task_merge(tid):
         conn.close()
 
 
+# ── Tasks ───────────────────────────────────────────────────────
+
+@app.route("/tasks")
+def tasks():
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, type, status, cost, triggered_by, created_at, finished_at,
+                   COALESCE(params->>'spec', params->>'description', params->>'prompt', params->>'question', '') AS gist
+            FROM tasks ORDER BY id DESC LIMIT 50
+        """)
+        tasks_list = cur.fetchall()
+    finally:
+        conn.close()
+    return render_template("tasks.html", tasks=tasks_list)
+
+
+@app.route("/tasks/<int:task_id>")
+def task_detail(task_id):
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
+        t = cur.fetchone()
+        if not t:
+            return redirect("/tasks")
+        d = {k: dec_to_num(v) for k, v in dict(t).items()}
+        p = d.get("params")
+        if isinstance(p, str):
+            try:
+                p = json.loads(p)
+            except (json.JSONDecodeError, TypeError):
+                p = None
+        d["params_pretty"] = json.dumps(p, indent=2, default=str) if p else ""
+    finally:
+        conn.close()
+    return render_template("task_detail.html", t=d)
+
+
 # ── Job Search Routes ──────────────────────────────────────────
 
 @app.route("/jobs")

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Tasks</h1>
+  <div class="sub">Latest 50 tasks across the system</div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <tr><th>ID</th><th>Type</th><th>Status</th><th>Gist</th><th>Cost</th><th>Triggered By</th><th>Created</th></tr>
+      {% for t in tasks %}
+      <tr>
+        <td class="mono"><a href="/tasks/{{ t.id }}" style="font-weight:600;">#{{ t.id }}</a></td>
+        <td class="subtle">{{ t.type }}</td>
+        <td><span class="badge {{ t.status }}">{{ t.status }}</span></td>
+        <td class="truncate" style="max-width:320px">{{ t.gist or '' }}</td>
+        <td class="mono">${{ "%.4f"|format(t.cost or 0) }}</td>
+        <td class="subtle">{{ t.triggered_by or '' }}</td>
+        <td class="mono subtle">{{ t.created_at.strftime('%Y-%m-%d %H:%M') if t.created_at else '' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7"><p class="empty">No tasks yet</p></td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endblock %}
