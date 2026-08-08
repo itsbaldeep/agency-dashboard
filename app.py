@@ -240,13 +240,39 @@ def content_preview(item_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT title, body FROM content_items WHERE id=%s", (item_id,))
+        cur.execute("SELECT title, body, structured FROM content_items WHERE id=%s", (item_id,))
         ci = cur.fetchone()
         if not ci:
             return "Not found", 404
-        html = markdown.markdown(ci['body'] or '*No content generated yet.*')
-        return render_template("base.html", title=ci['title'],
-                               content=f"<h1>{ci['title']}</h1>{html}")
+        banner = ('<div style="background:#fff7d6;border:1px solid #e6cc66;'
+                  'padding:10px 14px;margin-bottom:16px;border-radius:6px;font-size:14px;">'
+                  '&#9888; Preview only &#8212; final appearance depends on the target project\'s own site.'
+                  '</div>')
+        structured = ci.get('structured')
+        if isinstance(structured, str):
+            try:
+                structured = json.loads(structured)
+            except json.JSONDecodeError:
+                structured = None
+        if structured:
+            parts = [f"<h1>{structured.get('title', ci['title'])}</h1>"]
+            if structured.get('meta_description'):
+                parts.append(f"<p><i>{structured['meta_description']}</i></p>")
+            for s in structured.get('sections', []):
+                parts.append(f"<h2>{s.get('title', s.get('heading', ''))}</h2>")
+                parts.append(markdown.markdown(s.get('body_markdown') or ''))
+            faqs = structured.get('faqs', structured.get('faq', []))
+            if faqs:
+                parts.append("<h2>FAQs</h2>")
+                for f in faqs:
+                    q = f.get('q', f.get('question', ''))
+                    a = f.get('a', f.get('answer', ''))
+                    parts.append(f"<p><b>{q}</b><br>{markdown.markdown(a or '')}</p>")
+            content = banner + "".join(parts)
+        else:
+            html = markdown.markdown(ci['body'] or '*No content generated yet.*')
+            content = banner + f"<h1>{ci['title']}</h1>{html}"
+        return render_template("base.html", title=ci['title'], content=content)
     finally:
         conn.close()
 
