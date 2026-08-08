@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Projects</h1>
+  <div class="sub">Onboard repos &amp; list existing projects</div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <h3 style="margin-bottom:12px;">Onboard Project</h3>
+  <form action="/projects/onboard" method="post" style="display:grid;gap:12px;grid-template-columns:1fr 1fr;">
+    <div>
+      <label>Repo Name <span style="color:var(--red);">*</span></label>
+      <input type="text" name="repo_name" required pattern="[a-z0-9-]+" placeholder="my-cool-app" title="lowercase letters, numbers, hyphens">
+    </div>
+    <div>
+      <label>Git URL</label>
+      <input type="text" name="git_url" placeholder="https://github.com/itsbaldeep/repo.git">
+    </div>
+    <div>
+      <label>GitHub Owner</label>
+      <input type="text" name="github_owner" value="itsbaldeep">
+    </div>
+    <div>
+      <label>Base Branch</label>
+      <input type="text" name="base_branch" value="main">
+    </div>
+    <div style="grid-column:1 / -1;">
+      <button type="submit" class="btn btn-primary">+ Onboard</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-list">
+    {% for p in projects %}
+    <div class="card-list-item">
+      <div class="card-list-main">{{ p['name'] }}</div>
+      <div class="card-list-sub">{{ p['repo_name'] or '—' }} &middot; {{ p['base_branch'] or '—' }} &middot; {{ 'agent' if p['agent_allowed'] else 'no-agent' }}</div>
+    </div>
+    {% else %}
+    <p class="empty">No projects yet.</p>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

@@ -183,6 +183,45 @@ def onboard_client():
         conn.close()
 
 
+# ── Projects (onboard + list) ───────────────────────────────────
+
+@app.route("/projects")
+def projects():
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name, repo_name, base_branch, agent_allowed FROM projects ORDER BY id DESC")
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return render_template("projects.html", projects=rows)
+
+
+@app.route("/projects/onboard", methods=["POST"])
+def project_onboard():
+    repo_name = request.form.get("repo_name", "").strip()
+    if not re.fullmatch(r"[a-z0-9-]+", repo_name):
+        return jsonify({"ok": False, "error": "repo_name must match ^[a-z0-9-]+$"}), 400
+    params = json.dumps({
+        "repo_name": repo_name,
+        "git_url": request.form.get("git_url", "").strip(),
+        "github_owner": request.form.get("github_owner", "itsbaldeep").strip() or "itsbaldeep",
+        "base_branch": request.form.get("base_branch", "main").strip() or "main",
+    })
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('onboard_project', 'queued', %s, 'dashboard')", (params,))
+        conn.commit()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        conn.close()
+    return redirect("/projects")
+
+
 # ── Content ─────────────────────────────────────────────────────
 
 @app.route("/content")
