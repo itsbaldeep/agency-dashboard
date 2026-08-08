@@ -940,9 +940,16 @@ def task_detail(task_id):
             except (json.JSONDecodeError, TypeError):
                 p = None
         d["params_pretty"] = json.dumps(p, indent=2, default=str) if p else ""
+        ci = None
+        if d.get("type") == "generate_draft" and d.get("status") == "done":
+            cur.execute(
+                "SELECT id, title FROM content_items WHERE task_id=%s ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            )
+            ci = cur.fetchone()
     finally:
         conn.close()
-    return render_template("task_detail.html", t=d)
+    return render_template("task_detail.html", t=d, ci=ci)
 
 
 # ── Job Search Routes ──────────────────────────────────────────
