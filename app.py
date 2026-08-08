@@ -190,11 +190,74 @@ def projects():
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT name, repo_name, base_branch, agent_allowed FROM projects ORDER BY id DESC")
+        cur.execute("SELECT id, name, repo_name, base_branch, agent_allowed FROM projects ORDER BY id DESC")
         rows = cur.fetchall()
     finally:
         conn.close()
     return render_template("projects.html", projects=rows)
+
+
+@app.route("/projects/<int:project_id>")
+def project_detail(project_id):
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM projects WHERE id=%s", (project_id,))
+        project = cur.fetchone()
+        if not project:
+            return redirect("/projects")
+
+        caps = None
+        try:
+            cur.execute("SELECT capability, status, checked_at, evidence FROM capabilities WHERE project_id=%s ORDER BY capability", (project_id,))
+            caps = cur.fetchall()
+        except Exception:
+            caps = None
+
+        latest_audit = None
+        try:
+            cur.execute(
+                "SELECT result_ref FROM tasks WHERE type='defend_audit' AND status='done' "
+                "AND (params->>'project_id')::int=%s ORDER BY id DESC LIMIT 1", (project_id,))
+            latest_audit = cur.fetchone()
+        except Exception:
+            latest_audit = None
+
+        content_items = None
+        try:
+            cur.execute(
+                "SELECT ci.title, ci.content_type AS type, ci.status, ci.created_at, ci.id "
+                "FROM content_items ci JOIN brands b ON b.project_id=%s WHERE ci.brand_id=b.id",
+                (project_id,))
+            content_items = cur.fetchall()
+        except Exception:
+            content_items = None
+
+        dev_activity = None
+        try:
+            cur.execute(
+                "SELECT id, status, COALESCE(params->>'spec', params->>'description', "
+                "params->>'prompt', '') AS gist FROM tasks "
+                "WHERE type IN ('propose_fix','agent_task') AND params->>'repo'=%s "
+                "ORDER BY id DESC LIMIT 10", (project.get("repo_name"),))
+            dev_activity = cur.fetchall()
+        except Exception:
+            dev_activity = None
+
+        pending = None
+        try:
+            cur.execute(
+                "SELECT s.id, s.title, s.status FROM suggestions s "
+                "WHERE s.status='pending' AND s.brand_id IN (SELECT id FROM brands WHERE project_id=%s)",
+                (project_id,))
+            pending = cur.fetchall()
+        except Exception:
+            pending = None
+    finally:
+        conn.close()
+    return render_template("project_detail.html", project=project, caps=caps,
+                           latest_audit=latest_audit, content_items=content_items,
+                           dev_activity=dev_activity, pending=pending)
 
 
 @app.route("/projects/onboard", methods=["POST"])
