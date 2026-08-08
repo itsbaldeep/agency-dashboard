@@ -36,6 +36,10 @@
 </div>
 {% endif %}
 
+{% if preview %}
+<a class="btn" style="display:block;text-align:center;font-size:16px;padding:12px;margin-bottom:16px;" href="/content/{{ preview.id }}/preview">Preview: {{ preview.title }}</a>
+{% endif %}
+
 {% if t.result_ref %}
 <div class="card">
   <div class="card-title mb-2">Result</div>
