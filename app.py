@@ -285,6 +285,84 @@ def project_onboard():
     return redirect("/projects")
 
 
+# ── Per-project actions (audit / draft / fix) ──────────────────
+
+@app.route("/projects/<int:project_id>/audit", methods=["POST"])
+def project_audit(project_id):
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT repo_url FROM projects WHERE id=%s", (project_id,))
+        row = cur.fetchone()
+        if not row or not (row["repo_url"] or "").startswith("http"):
+            return redirect("/projects/%d" % project_id)
+        params = json.dumps({"project_id": project_id, "url": row["repo_url"]})
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('defend_audit', 'queued', %s, 'dashboard')", (params,))
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect("/projects/%d" % project_id)
+
+
+@app.route("/projects/<int:project_id>/draft", methods=["POST"])
+def project_draft(project_id):
+    keyword = request.form.get("keyword", "").strip()
+    brief = request.form.get("brief", "").strip()
+    if not keyword or not brief:
+        return redirect("/projects/%d" % project_id)
+    def w(field, default):
+        v = request.form.get(field, "").strip()
+        return int(v) if v.isdigit() else default
+    model = request.form.get("model", "").strip()
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name FROM projects WHERE id=%s", (project_id,))
+        proj = cur.fetchone()
+        if not proj:
+            return redirect("/projects")
+        cur.execute("SELECT id FROM brands WHERE project_id=%s", (project_id,))
+        brand = cur.fetchone()
+        if not brand:
+            cur.execute("INSERT INTO brands (name, project_id) VALUES (%s, %s) RETURNING id", (proj["name"], project_id))
+            brand = cur.fetchone()
+        params = {"content_type": "blog_post", "brand_id": brand["id"],
+                  "suggestion": brief, "suggestion_title": brief[:80],
+                  "target_keyword": keyword, "word_count_min": w("words_min", 900),
+                  "word_count_max": w("words_max", 1400), "source": "dashboard"}
+        if model:
+            params["model"] = model
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('generate_draft', 'queued', %s, 'dashboard')", (json.dumps(params),))
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect("/projects/%d" % project_id)
+
+
+@app.route("/projects/<int:project_id>/fix", methods=["POST"])
+def project_fix(project_id):
+    description = request.form.get("description", "").strip()
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT repo_name FROM projects WHERE id=%s", (project_id,))
+        row = cur.fetchone()
+        if not row or not description:
+            return redirect("/projects/%d" % project_id)
+        params = json.dumps({"repo": row["repo_name"], "description": description, "source": "dashboard"})
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('propose_fix', 'queued', %s, 'dashboard')", (params,))
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect("/projects/%d" % project_id)
+
+
 # ── Content ─────────────────────────────────────────────────────
 
 @app.route("/content")
