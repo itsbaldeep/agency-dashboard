@@ -36,6 +36,12 @@
 </div>
 {% endif %}
 
+{% if ci %}
+<div class="card">
+  <a class="btn" href="/content/{{ ci.id }}/preview">Preview: {{ ci.title }}</a>
+</div>
+{% endif %}
+
 {% if t.result_ref %}
 <div class="card">
   <div class="card-title mb-2">Result</div>
