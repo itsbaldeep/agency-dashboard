@@ -83,9 +83,38 @@
       <div class="card-list-main">{{ s['title'] }} <span class="badge {{ s['status'] }}">{{ s['status'] }}</span></div>
     </div>
     {% endfor %}
-  </div>
+   </div>
   {% else %}
   <p class="empty">No pending suggestions.</p>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-title mb-2">Actions</div>
+
+  <form method="post" action="/projects/{{ project['id'] }}/audit" style="margin-bottom:14px;">
+    <button class="btn" {% if not (project.get('repo_url') or '').startswith('http') %}disabled title="Enable Run Audit by setting a repo_url starting with http"{% endif %} type="submit">Run Audit</button>
+    {% if not (project.get('repo_url') or '').startswith('http') %}
+    <span class="subtle">Disabled — repo_url must start with http.</span>
+    {% endif %}
+  </form>
+
+  <form method="post" action="/projects/{{ project['id'] }}/draft">
+    <div class="mb-2"><b>Draft Content</b></div>
+    <input type="text" name="keyword" placeholder="Target keyword" required style="margin-bottom:8px;">
+    <textarea name="brief" placeholder="Brief" required style="width:100%;margin-bottom:8px;"></textarea>
+    <input type="number" name="words_min" value="900" placeholder="Min words" style="width:140px;">
+    <input type="number" name="words_max" value="1400" placeholder="Max words" style="width:140px;">
+    <input type="text" name="model" placeholder="Model (optional)" style="margin-right:8px;">
+    <button class="btn" type="submit">Draft</button>
+  </form>
+
+  {% if project['agent_allowed'] %}
+  <form method="post" action="/projects/{{ project['id'] }}/fix" style="margin-top:14px;">
+    <div class="mb-2"><b>Dev Fix</b></div>
+    <textarea name="description" placeholder="Describe the bug or change" required style="width:100%;margin-bottom:8px;"></textarea>
+    <button class="btn" type="submit">Submit Fix</button>
+  </form>
   {% endif %}
 </div>
 
