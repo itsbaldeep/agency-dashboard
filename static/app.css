@@ -320,3 +320,14 @@ select option{background:var(--surface);color:var(--text)}
 .angle-card{cursor:pointer;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:6px;transition:all var(--transition)}
 .angle-card:hover{border-color:var(--accent);background:rgba(74,127,255,0.03)}
 .angle-card.selected{border-color:var(--accent);background:rgba(74,127,255,0.08)}
+
+/* ── Content pipeline block schema chips ─────────────── */
+.content-block-brief{margin:2px 0}
+.content-block-type{display:inline-block;padding:1px 8px;font-size:11px;font-weight:600;border-radius:10px;margin:2px 3px 2px 0;background:rgba(90,112,144,0.14);color:var(--text-muted);text-transform:capitalize}
+.content-block-type.intro,.content-block-type.heading{background:var(--purple-dim);color:var(--purple)}
+.content-block-type.prose{background:rgba(74,127,255,0.12);color:var(--accent)}
+.content-block-type.table,.content-block-type.chart,.content-block-type.callout{background:var(--green-dim);color:var(--green)}
+.content-block-type.steps,.content-block-type.key_takeaways{background:var(--amber-dim);color:var(--amber)}
+.content-block-type.faq{background:var(--red-dim);color:var(--red)}
+.content-block-type.image_slot{background:rgba(165,114,255,0.14);color:var(--purple)}
+.badge.outline{background:var(--accent-glow);color:var(--accent)}

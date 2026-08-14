@@ -74,6 +74,79 @@
   {% endif %}
 </div>
 
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-title mb-2">Content Pipeline</div>
+  <p class="subtle" style="margin-top:0;">
+    Stages: research → outline → <b>you inspect</b> → compose. Research + outline are
+    queued together (cheap). Compose only runs when you approve the outline — that's the
+    spend gate before the expensive ~8-14 model calls.
+  </p>
+
+  <form method="post" action="/projects/{{ project['id'] }}/content-pipeline" class="mb-2" style="border:1px dashed var(--border-hover);padding:12px;border-radius:6px;">
+    <div class="mb-2"><b>Research + Outline</b></div>
+    <input type="text" name="target_keyword" placeholder="Target keyword" required style="width:100%;margin-bottom:8px;">
+    <input type="text" name="title" placeholder="Article title (optional)" style="width:100%;margin-bottom:8px;">
+    <textarea name="competitor_urls" placeholder="Competitor URLs — one per line" required style="width:100%;margin-bottom:8px;"></textarea>
+    <button class="btn" type="submit">Run Research + Outline</button>
+  </form>
+
+  {% if outlines %}
+  <div class="mb-2" style="margin-top:16px;"><b>Pending outline(s) awaiting your inspection</b></div>
+  {% for o in outlines %}
+  <div style="border:1px solid var(--border-hover);border-radius:6px;padding:10px 12px;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+      <b>{{ o['title'] }}</b>
+      <span class="badge {{ o['status'] }}">{{ o['status'] }}</span>
+      <span class="subtle">#{{ o['id'] }} · {{ o['created_at'] }}</span>
+    </div>
+    <div class="mb-2" style="margin-bottom:10px;">
+      {% for b in o['blocks'] %}
+        <span class="content-block-type {{ b['type'] }}">{{ b['type'] }}</span>
+      {% endfor %}
+    </div>
+    <ol style="margin:6px 0 10px;padding-left:18px;">
+      {% for b in o['blocks'] %}
+      <li class="content-block-brief"><b>{{ b['type'] }}</b> — {{ b['brief'] }}{% if b['chart_type'] %} <span class="subtle">({{ b['chart_type'] }})</span>{% endif %}</li>
+      {% endfor %}
+    </ol>
+    {% if o['compose_task_id'] %}
+      <a class="btn" href="/tasks/{{ o['compose_task_id'] }}">Compose running (#{{ o['compose_task_id'] }})</a>
+    {% else %}
+    <form method="post" action="/projects/{{ project['id'] }}/content-compose">
+      <input type="hidden" name="content_item_id" value="{{ o['id'] }}">
+      <input type="hidden" name="target_keyword" value="{{ o['structured'].get('target_keyword','') }}">
+      <button class="btn" type="submit">Compose this outline</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="empty">No pending outlines. Run Research + Outline above.</p>
+  {% endif %}
+
+  {% if recent_research %}
+  <div class="mb-2" style="margin-top:16px;"><b>Recent competitor research</b></div>
+  <div class="card-list">
+    {% for r in recent_research %}
+    <div class="card-list-item">
+      <div class="card-list-main">
+        <span>{{ r['target_keyword'] }}</span>
+        {% if r['outline_task_id'] %}
+          <a class="btn" href="/tasks/{{ r['outline_task_id'] }}">Outline #{{ r['outline_task_id'] }}</a>
+        {% endif %}
+      </div>
+      <div class="card-list-sub">research #{{ r['id'] }} · {{ r['created_at'] }}</div>
+      {% if (r['gaps'] or []) %}
+      <div class="card-list-sub">Gaps:
+        {% for g in r['gaps'] %}{{ g['gap'] }}{% if not loop.last %}; {% endif %}{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
 <div class="card">
   <div class="card-title mb-2">Pending</div>
   {% if pending %}

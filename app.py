@@ -233,6 +233,34 @@ def project_detail(project_id):
         except Exception:
             content_items = None
 
+        # Multi-stage content pipeline: awaiting composition = outlines not yet
+        # composed, so the human can inspect the plan before the spend gate.
+        outlines = []
+        try:
+            cur.execute(
+                "SELECT ci.id, ci.title, ci.status, ci.structured, ci.created_at, "
+                "       t.id AS compose_task_id, t.status AS compose_status "
+                "FROM content_items ci JOIN brands b ON b.project_id=%s AND ci.brand_id=b.id "
+                "LEFT JOIN tasks t ON t.type='content_compose' AND (t.params->>'content_item_id')::int=ci.id "
+                "WHERE ci.status='outline' ORDER BY ci.id DESC",
+                (project_id,))
+            for o in cur.fetchall():
+                o["blocks"] = (o.get("structured") or {}).get("blocks") or []
+                outlines.append(o)
+        except Exception:
+            outlines = []
+
+        recent_research = None
+        try:
+            cur.execute(
+                "SELECT cr.id, cr.target_keyword, cr.gaps, cr.strongest, cr.elements, cr.created_at, "
+                "       (SELECT t.id FROM tasks t WHERE t.type='content_outline' "
+                "        AND (t.params->>'research_id')::int=cr.id ORDER BY t.id DESC LIMIT 1) AS outline_task_id "
+                "FROM content_research cr ORDER BY cr.id DESC LIMIT 5")
+            recent_research = cur.fetchall()
+        except Exception:
+            recent_research = None
+
         dev_activity = None
         try:
             cur.execute(
@@ -257,7 +285,8 @@ def project_detail(project_id):
         conn.close()
     return render_template("project_detail.html", project=project, caps=caps,
                            latest_audit=latest_audit, content_items=content_items,
-                           dev_activity=dev_activity, pending=pending)
+                           dev_activity=dev_activity, pending=pending,
+                           outlines=outlines, recent_research=recent_research)
 
 
 @app.route("/projects/onboard", methods=["POST"])
@@ -339,6 +368,74 @@ def project_draft(project_id):
         cur.execute(
             "INSERT INTO tasks (type, status, params, triggered_by) "
             "VALUES ('generate_draft', 'queued', %s, 'dashboard') RETURNING id", (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect("/tasks/%d" % task_id)
+
+
+@app.route("/projects/<int:project_id>/content-pipeline", methods=["POST"])
+def project_content_pipeline(project_id):
+    """Queue the multi-stage content pipeline for a project. Research auto-chains
+    to outline (both cheap); compose is a separate deliberate gate."""
+    keyword = request.form.get("target_keyword", "").strip()
+    urls_raw = request.form.get("competitor_urls", "").strip()
+    title = request.form.get("title", "").strip()
+    if not keyword:
+        return redirect("/projects/%d" % project_id)
+    urls = [u.strip() for u in urls_raw.splitlines() if u.strip()]
+    if not urls:
+        return redirect("/projects/%d" % project_id)
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name FROM projects WHERE id=%s", (project_id,))
+        proj = cur.fetchone()
+        if not proj:
+            return redirect("/projects")
+        cur.execute("SELECT id FROM brands WHERE project_id=%s", (project_id,))
+        brand = cur.fetchone()
+        if not brand:
+            cur.execute("INSERT INTO brands (name, project_id) VALUES (%s, %s) RETURNING id", (proj["name"], project_id))
+            brand = cur.fetchone()
+        params = {
+            "target_keyword": keyword, "competitor_urls": urls,
+            "brand_id": brand["id"], "source": "dashboard",
+        }
+        if title:
+            params["title"] = title
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('content_research', 'queued', %s, 'dashboard') RETURNING id", (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect("/tasks/%d" % task_id)
+
+
+@app.route("/projects/<int:project_id>/content-compose", methods=["POST"])
+def project_content_compose(project_id):
+    """Deliberate gate: queue compose ONLY after the human inspects the outline."""
+    ci_id = request.form.get("content_item_id", "").strip()
+    target_keyword = request.form.get("target_keyword", "").strip()
+    if not ci_id or not target_keyword:
+        return redirect("/projects/%d" % project_id)
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        # only allow composing outlines for this project's brands
+        cur.execute(
+            "SELECT ci.id FROM content_items ci JOIN brands b ON b.id=ci.brand_id "
+            "WHERE ci.id=%s AND ci.status='outline' AND b.project_id=%s",
+            (int(ci_id), project_id))
+        if not cur.fetchone():
+            return redirect("/projects/%d" % project_id)
+        params = json.dumps({"content_item_id": int(ci_id), "target_keyword": target_keyword, "source": "dashboard"})
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('content_compose', 'queued', %s, 'dashboard') RETURNING id", (params,))
         task_id = cur.fetchone()["id"]
         conn.commit()
     finally:
