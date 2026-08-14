@@ -1101,7 +1101,7 @@ def task_detail(task_id):
         rr = d.get("result_ref")
         if rr:
             try:
-                d["result_pretty"] = json.dumps(json.loads(rr), indent=2) if rr.strip().startswith(("{", "[")) else rr
+                d["result_pretty"] = json.dumps(json.loads(rr), indent=2)
             except (json.JSONDecodeError, TypeError):
                 d["result_pretty"] = rr
         ci = None
