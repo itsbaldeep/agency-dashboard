@@ -824,8 +824,15 @@ def dev_tasks():
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT t.*, COALESCE(p.name, COALESCE(t.params->>'repo', 'system')) AS project_name
-            FROM tasks t LEFT JOIN projects p ON p.repo_name = t.params->>'repo'
+            SELECT t.*,
+                   COALESCE(pid.name, rp.name, t.params->>'repo', 'system') AS project_name
+            FROM tasks t
+            LEFT JOIN LATERAL (
+                SELECT name FROM projects WHERE id = (t.params->>'project_id')::int LIMIT 1
+            ) pid ON t.params->>'project_id' ~ '^[0-9]+$'
+            LEFT JOIN LATERAL (
+                SELECT name FROM projects WHERE repo_name = t.params->>'repo' ORDER BY id LIMIT 1
+            ) rp ON true
             WHERE t.type = 'propose_fix'
             ORDER BY t.created_at DESC LIMIT 50
         """)
