@@ -653,6 +653,8 @@ def get_resources():
     conn = db()
     try:
         cur = conn.cursor()
+        cur.execute("SELECT name FROM projects ORDER BY name")
+        all_projects = cur.fetchall()
         cur.execute("""
             SELECT s.name AS service_name, s.container, s.mem_limit_mb,
                    p.name AS project_name
@@ -665,7 +667,8 @@ def get_resources():
         conn.close()
 
     container_map = {s["container"]: s for s in db_services if s["container"]}
-    project_map = {}
+    project_map = {p["name"]: {"name": p["name"], "services": [], "cpu_sum": 0.0, "mem_mb": 0.0}
+                   for p in all_projects}
     total_mb = 0.0
 
     for cname, s in stats.items():
@@ -683,8 +686,7 @@ def get_resources():
             "mem_mb": mem_mb, "mem_perc": s.get("MemPerc", "0%"),
             "pids": s.get("PIDs", "0"),
         }
-        if proj_name not in project_map:
-            project_map[proj_name] = {"name": proj_name, "services": [], "cpu_sum": 0.0, "mem_mb": 0.0}
+        project_map.setdefault(proj_name, {"name": proj_name, "services": [], "cpu_sum": 0.0, "mem_mb": 0.0})
         project_map[proj_name]["services"].append(entry)
         project_map[proj_name]["mem_mb"] += mem_mb
         project_map[proj_name]["cpu_sum"] += float(s.get("CPUPerc", "0%").rstrip("%"))
