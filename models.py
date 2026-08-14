@@ -608,11 +608,15 @@ def get_spend():
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT COALESCE(p.name, 'system') AS project_name,
-                   COUNT(*) AS total_tasks, SUM(cost) AS total_cost
-            FROM tasks t LEFT JOIN projects p ON false
-            WHERE t.cost IS NOT NULL
-            GROUP BY p.name ORDER BY total_cost DESC
+            SELECT COALESCE(p.name, COALESCE(t.params->>'repo', 'system')) AS project_name,
+                   COUNT(*) AS total_tasks, SUM(t.cost) AS total_cost
+            FROM tasks t
+            LEFT JOIN projects p
+              ON p.repo_name = t.params->>'repo'
+              OR p.id = COALESCE(NULLIF(t.params->>'project_id', ''), '0')::int
+            WHERE t.cost IS NOT NULL AND t.cost > 0
+            GROUP BY COALESCE(p.name, COALESCE(t.params->>'repo', 'system'))
+            ORDER BY total_cost DESC
         """)
         by_project = cur.fetchall()
         cur.execute("""
