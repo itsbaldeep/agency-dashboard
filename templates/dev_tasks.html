@@ -11,7 +11,7 @@
     <div>
       <div class="subtle mb-2">Repo</div>
       <select id="dev-repo">
-        {% for r in repos %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+        {% for r in repos %}<option value="{{ r.repo_name }}">{{ r.name }} ({{ r.repo_name }})</option>{% endfor %}
       </select>
     </div>
     <div>

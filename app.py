@@ -807,7 +807,16 @@ def design_variations(project_id):
         conn.close()
 
 
-# ── Dev tasks (propose_fix) ─────────────────────────────────────
+# ── Dev tasks (propose_fix) ───────────────────────────────────
+
+def dev_task_repos(cur):
+    """Authorized fixable repos straight from Postgres (projects table)."""
+    cur.execute(
+        "SELECT repo_name, name, base_branch, github_owner "
+        "FROM projects WHERE agent_allowed=true "
+        "AND repo_name IS NOT NULL AND repo_name<>'' ORDER BY name")
+    return cur.fetchall()
+
 
 @app.route("/dev-tasks")
 def dev_tasks():
@@ -834,7 +843,8 @@ def dev_tasks():
                     t["pr_data"] = None
             else:
                 t["pr_data"] = None
-        return render_template("dev_tasks.html", tasks=tasks_list, repos=sorted(["hearth", "streamwise", "dashboard"]))
+        repos = dev_task_repos(cur)
+        return render_template("dev_tasks.html", tasks=tasks_list, repos=repos)
     finally:
         conn.close()
 
@@ -844,13 +854,16 @@ def dev_task_create():
     repo = request.form.get("repo", "")
     desc = request.form.get("description", "")
     base = request.form.get("base", "main")
-    if repo not in ("hearth", "streamwise", "dashboard"):
-        return jsonify({"ok": False, "error": f"Invalid repo: {repo}"}), 400
     if not desc.strip():
         return jsonify({"ok": False, "error": "description required"}), 400
     conn = models.db()
     try:
         cur = conn.cursor()
+        repos = dev_task_repos(cur)
+        match = next((r for r in repos if r["repo_name"] == repo), None)
+        if not match:
+            return jsonify({"ok": False, "error": f"Repo not authorized: {repo}"}), 400
+        base = base or str(match["base_branch"] or "main")
         params = json.dumps({"repo": repo, "description": desc, "base": base})
         cur.execute("INSERT INTO tasks (type, params) VALUES ('propose_fix', %s) RETURNING id", (params,))
         tid = cur.fetchone()["id"]
