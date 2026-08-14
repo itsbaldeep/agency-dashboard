@@ -596,7 +596,7 @@ def task_status(tid):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id, type, status, prompt_tokens, completion_tokens, cost, result_ref, error, finished_at FROM tasks WHERE id=%s", (tid,))
+        cur.execute("SELECT id, type, status, progress, progress_text, prompt_tokens, completion_tokens, cost, result_ref, error, finished_at FROM tasks WHERE id=%s", (tid,))
         t = cur.fetchone()
         if not t:
             return jsonify({"ok": False, "error": "not found"}), 404
@@ -604,6 +604,43 @@ def task_status(tid):
         return jsonify(resp)
     finally:
         conn.close()
+
+
+@app.route("/tasks/<int:task_id>/monitor")
+def task_monitor(task_id):
+    """Live progress fragment for the task detail page (self-polling)."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, status, progress, progress_text, prompt_tokens, "
+                    "completion_tokens, cost, finished_at, error FROM tasks WHERE id=%s",
+                    (task_id,))
+        t = cur.fetchone()
+        if t:
+            t = {k: dec_to_num(v) for k, v in dict(t).items()}
+    finally:
+        conn.close()
+    if not t:
+        return "", 404
+    return render_template("_task_monitor.html", t=t)
+
+
+@app.route("/api/dev-tasks/<int:tid>/progress")
+def dev_task_progress(tid):
+    """Live progress fragment for a dev-tasks table row (self-polling)."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, status, progress, progress_text, finished_at, error "
+                    "FROM tasks WHERE id=%s", (tid,))
+        t = cur.fetchone()
+        if t:
+            t = {k: dec_to_num(v) for k, v in dict(t).items()}
+    finally:
+        conn.close()
+    if not t:
+        return "", 404
+    return render_template("_dev_task_progress.html", t=t)
 
 
 # ── Brand audit / suggestion actions (kept from original) ──────

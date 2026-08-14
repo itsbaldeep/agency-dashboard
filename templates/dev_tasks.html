@@ -34,7 +34,7 @@
       <td class="mono">#{{ t.id }}</td>
       <td><span class="badge badge-dim">{{ pr.repo or t.params|jsonloads('repo') or '-' }}</span></td>
       <td class="truncate" style="max-width:250px">{{ pr.description or '' }}</td>
-      <td><span class="badge {{ t.status }}">{{ t.status }}</span></td>
+      <td>{% include "_dev_task_progress.html" %}</td>
       <td>{% if pr and pr.pr_url %}<a href="{{ pr.pr_url }}" target="_blank" style="font-size:11px">PR &#8599;</a>{% else %}<span class="dim">-</span>{% endif %}</td>
       <td class="mono">{{ (t.prompt_tokens or 0)+(t.completion_tokens or 0) }}</td>
       <td class="mono">${{ "%.6f"|format(t.cost or 0) }}</td>

@@ -1,0 +1,10 @@
+{% if t.status == 'running' %}
+<span id="dtp-{{ t.id }}"
+      hx-get="/api/dev-tasks/{{ t.id }}/progress" hx-trigger="every 2s" hx-swap="outerHTML">
+  <a href="/tasks/{{ t.id }}"><span class="badge {{ t.status }}">{{ t.status }}</span></a>
+  <div class="progress-track thin"><div class="progress-fill" style="width:{{ t.progress or 3 }}%"></div></div>
+  <span class="dim">{{ t.progress or 0 }}% {{ t.progress_text or '' }}</span>
+</span>
+{% else %}
+<a href="/tasks/{{ t.id }}"><span class="badge {{ t.status }}">{{ t.status }}</span></a>
+{% endif %}

@@ -1,0 +1,24 @@
+{% if t.status == 'running' %}
+<span id="task-monitor"
+      hx-get="/tasks/{{ t.id }}/monitor" hx-trigger="every 2s" hx-swap="outerHTML">
+  <div class="card">
+    <div class="card-title mb-2">Progress <span class="badge {{ t.status }}">{{ t.status }}</span></div>
+    <div class="progress-track"><div class="progress-fill" style="width:{{ t.progress or 3 }}%"></div></div>
+    <div class="mt-1">
+      <strong>{{ t.progress or 0 }}%</strong> — {{ t.progress_text or 'working…' }}
+    </div>
+    <div class="mt-2 dim">Tokens: {{ (t.prompt_tokens or 0)+(t.completion_tokens or 0) }}
+      &middot; Cost: ${{ "%.6f"|format(t.cost or 0) }}</div>
+  </div>
+</span>
+{% elif t.status in ('failed', 'error') %}
+<div class="card">
+  <div class="card-title mb-2">Status <span class="badge {{ t.status }}">{{ t.status }}</span></div>
+  <div class="dim" style="color:var(--red)">{{ t.error or 'errored' }}</div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-title mb-2">Status <span class="badge {{ t.status }}">{{ t.status }}</span></div>
+  <div class="dim">Completed &mdash; {{ t.progress or 100 }}%{% if t.progress_text %} ({{ t.progress_text }}){% endif %}</div>
+</div>
+{% endif %}
