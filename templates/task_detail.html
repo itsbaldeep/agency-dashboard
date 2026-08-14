@@ -29,6 +29,31 @@
   {% include "_task_monitor.html" %}
 </div>
 
+<div class="card" style="border-color:var(--accent)">
+  <div class="card-title mb-2">Re-run / duplicate <span class="dim">(tweak any parameter)</span></div>
+  <button class="btn btn-xs" onclick="var f=document.getElementById('rerun-form'); f.style.display=f.style.display==='none'?'block':'none';">Toggle editor</button>
+  <div id="rerun-form" style="display:none;margin-top:10px">
+    <form onsubmit="return rerunTask(event)">
+      {% for k, v in t.params_obj.items() %}
+      <div class="rerun-row">
+        <label class="subtle">{{ k }}</label>
+        <input type="text" name="param__{{ k }}" value="{{ v if v is string else v|tojson }}"
+               placeholder="{{ k }}">
+      </div>
+      {% endfor %}
+      <div class="rerun-row">
+        <label class="subtle">extra params (JSON object)</label>
+        <textarea name="extra_json" rows="3" style="width:100%"
+                  placeholder='{"description":"new prompt", "timeout":600, "rounds":4}'></textarea>
+      </div>
+      <div class="mt-2">
+        <button type="submit" class="btn btn-primary btn-sm">Re-run as new task</button>
+        <span id="rerun-status" class="dim mt-2"></span>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-title mb-2">Params</div>
   <pre style="white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:monospace;font-size:12px;margin:0;">{{ t.params_pretty }}</pre>
@@ -55,4 +80,20 @@
 {% endif %}
 
 <a href="/tasks" class="btn">&larr; Back to Tasks</a>
+
+<script>
+async function rerunTask(e) {
+  e.preventDefault();
+  var s = document.getElementById('rerun-status');
+  s.textContent = 'queuing…';
+  try {
+    var fd = new FormData(e.target);
+    var r = await fetch('/api/tasks/{{ t.id }}/rerun', { method:'POST', body: fd });
+    var d = await r.json();
+    if (d.ok) { s.textContent = 'queued as task #'+d.task_id+' — redirecting…'; location.href = '/tasks/'+d.task_id; }
+    else { s.textContent = 'Error: ' + d.error; }
+  } catch(err) { s.textContent = 'Error: ' + err.message; }
+  return false;
+}
+</script>
 {% endblock %}

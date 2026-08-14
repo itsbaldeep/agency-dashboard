@@ -240,6 +240,10 @@ select option{background:var(--surface);color:var(--text)}
 .flex-center{display:flex;align-items:center}
 .text-right{text-align:right}
 .truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+.rerun-row{display:grid;grid-template-columns:140px 1fr;gap:8px;align-items:center;margin-bottom:8px}
+.rerun-row input{width:100%}
+.btn-xs{padding:2px 8px;font-size:11px}
+.btn-sm{padding:4px 12px;font-size:12px}
 .progress-track{height:10px;background:rgba(28,38,64,0.5);border-radius:999px;overflow:hidden}
 .progress-track.thin{height:6px;margin:3px 0}
 .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),#7aa2ff);border-radius:999px;transition:width .5s ease} 

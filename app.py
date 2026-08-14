@@ -643,6 +643,67 @@ def dev_task_progress(tid):
     return render_template("_dev_task_progress.html", t=t)
 
 
+NUMERIC_PARAMS = {"timeout", "rounds", "word_count_min", "word_count_max", "limit"}
+
+
+@app.route("/api/tasks/<int:tid>/rerun", methods=["POST"])
+def task_rerun(tid):
+    """Duplicate a task with editable params. Returns the new task id."""
+    source_repo = request.args.get("repo", "")
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT type, params FROM tasks WHERE id=%s", (tid,))
+        src = cur.fetchone()
+        if not src:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        try:
+            base_params = json.loads(src["params"]) if isinstance(src["params"], str) else (src["params"] or {})
+            base_params = dict(base_params) if isinstance(base_params, dict) else {}
+        except Exception:
+            base_params = {}
+        # Copy editable params that were submitted (param__<key>). Prefilled by the
+        # form with the source task's values, so only touched ones matter.
+        for k, v in request.form.items():
+            if k.startswith("param__"):
+                key = k[len("param__"):]
+                if not v:
+                    base_params.pop(key, None)
+                    continue
+                if key in NUMERIC_PARAMS:
+                    try:
+                        base_params[key] = int(v)
+                    except ValueError:
+                        return jsonify({"ok": False, "error": f"{key} must be a number"}), 400
+                else:
+                    base_params[key] = v.strip()
+        # Optional free-form extra params as JSON.
+        extra = request.form.get("extra_json", "").strip()
+        if extra:
+            try:
+                ex = json.loads(extra)
+                if isinstance(ex, dict):
+                    base_params.update(ex)
+                else:
+                    return jsonify({"ok": False, "error": "extra_json must be a JSON object"}), 400
+            except (json.JSONDecodeError, TypeError):
+                return jsonify({"ok": False, "error": "extra_json is not valid JSON"}), 400
+        if source_repo and not base_params.get("repo"):
+            base_params["repo"] = source_repo
+        base_params["source"] = "dashboard-rerun"
+        base_params["rerun_from"] = tid
+        cur.execute("INSERT INTO tasks (type, status, params, triggered_by) "
+                    "VALUES (%s,'queued',%s,'dashboard-rerun') RETURNING id",
+                    (src["type"], json.dumps(base_params)))
+        new_id = cur.fetchone()["id"]
+        conn.commit()
+        return jsonify({"ok": True, "task_id": new_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        conn.close()
+
+
 # ── Brand audit / suggestion actions (kept from original) ──────
 
 @app.route("/api/brands/audit", methods=["POST"])
@@ -990,6 +1051,7 @@ def task_detail(task_id):
             except (json.JSONDecodeError, TypeError):
                 p = None
         d["params_pretty"] = json.dumps(p, indent=2, default=str) if p else ""
+        d["params_obj"] = p if isinstance(p, dict) else {}
         ci = None
         if d.get("type") == "generate_draft" and d.get("status") == "done":
             cur.execute(
