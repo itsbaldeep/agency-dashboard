@@ -608,15 +608,21 @@ def get_spend():
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT COALESCE(pid.name, rp.name, t.params->>'repo', 'system') AS project_name,
+            SELECT COALESCE(pid.name, rp.name, rnp.name, 'system') AS project_name,
                    COUNT(*) AS total_tasks, SUM(t.cost) AS total_cost
             FROM tasks t
             LEFT JOIN LATERAL (
-                SELECT name FROM projects WHERE id = (t.params->>'project_id')::int LIMIT 1
-            ) pid ON t.params->>'project_id' ~ '^[0-9]+$'
+                SELECT name FROM projects
+                WHERE t.params->>'project_id' ~ '^[0-9]+$'
+                  AND id = (t.params->>'project_id')::int
+                LIMIT 1
+            ) pid ON true
             LEFT JOIN LATERAL (
                 SELECT name FROM projects WHERE repo_name = t.params->>'repo' ORDER BY id LIMIT 1
             ) rp ON true
+            LEFT JOIN LATERAL (
+                SELECT name FROM projects WHERE name = t.params->>'repo' ORDER BY id LIMIT 1
+            ) rnp ON true
             WHERE t.cost IS NOT NULL
             GROUP BY 1
             ORDER BY 3 DESC NULLS LAST
