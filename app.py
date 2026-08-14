@@ -43,6 +43,37 @@ def dec_to_num(v):
     return v
 
 
+def fmt_ts(v):
+    if not v:
+        return ""
+    try:
+        if isinstance(v, str):
+            v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        return v.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return str(v)
+
+
+def fmt_dur(started, finished):
+    if not started or not finished:
+        return ""
+    try:
+        if isinstance(started, str):
+            started = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        if isinstance(finished, str):
+            finished = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+    except Exception:
+        return ""
+    s = int((finished - started).total_seconds())
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m {s}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m"
+
+
 # ── Dashboard / Overview ────────────────────────────────────────
 
 @app.route("/")
@@ -941,6 +972,8 @@ def dev_tasks():
                     t["pr_data"] = None
             else:
                 t["pr_data"] = None
+            t["created_fmt"] = fmt_ts(t.get("created_at"))
+            t["duration"] = fmt_dur(t.get("started_at"), t.get("finished_at"))
         repos = dev_task_repos(cur)
         return render_template("dev_tasks.html", tasks=tasks_list, repos=repos)
     finally:
@@ -1024,13 +1057,18 @@ def tasks():
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, type, status, cost, triggered_by, created_at, finished_at,
+            SELECT id, type, status, cost, triggered_by, created_at, started_at, finished_at,
+                   prompt_tokens, completion_tokens,
                    COALESCE(params->>'spec', params->>'description', params->>'prompt', params->>'question', '') AS gist
             FROM tasks ORDER BY id DESC LIMIT 50
         """)
         tasks_list = cur.fetchall()
     finally:
         conn.close()
+    for t in tasks_list:
+        t["created_fmt"] = fmt_ts(t.get("created_at"))
+        t["duration"] = fmt_dur(t.get("started_at"), t.get("finished_at"))
+        t["tokens"] = (t.get("prompt_tokens") or 0) + (t.get("completion_tokens") or 0)
     return render_template("tasks.html", tasks=tasks_list)
 
 
@@ -1052,6 +1090,20 @@ def task_detail(task_id):
                 p = None
         d["params_pretty"] = json.dumps(p, indent=2, default=str) if p else ""
         d["params_obj"] = p if isinstance(p, dict) else {}
+        d["created_fmt"] = fmt_ts(d.get("created_at"))
+        d["started_fmt"] = fmt_ts(d.get("started_at"))
+        d["finished_fmt"] = fmt_ts(d.get("finished_at"))
+        d["duration"] = fmt_dur(d.get("started_at"), d.get("finished_at"))
+        d["tokens"] = (d.get("prompt_tokens") or 0) + (d.get("completion_tokens") or 0)
+        d["source"] = d["params_obj"].get("source") if d["params_obj"] else None
+        d["model"] = d["params_obj"].get("model") if d["params_obj"] else None
+        d["result_pretty"] = ""
+        rr = d.get("result_ref")
+        if rr:
+            try:
+                d["result_pretty"] = json.dumps(json.loads(rr), indent=2) if rr.strip().startswith(("{", "[")) else rr
+            except (json.JSONDecodeError, TypeError):
+                d["result_pretty"] = rr
         ci = None
         if d.get("type") == "generate_draft" and d.get("status") == "done":
             cur.execute(

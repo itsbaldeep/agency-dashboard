@@ -1,38 +1,73 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h1>Task #{{ t.id }}</h1>
-  <div class="sub">
-    <span class="badge {{ t.type }}">{{ t.type }}</span>
-    <span class="badge {{ t.status }}">{{ t.status }}</span>
-    &mdash; triggered by {{ t.triggered_by or 'system' }}
+  <div style="flex:1">
+    <h1>Task #{{ t.id }}</h1>
+    <div class="sub">{{ t.type }} &mdash; created {{ t.created_fmt or '—' }}</div>
+  </div>
+  <div class="gap-2">
+    <a href="/tasks" class="btn">&larr; Back to Tasks</a>
+    <button class="btn btn-primary" onclick="openRerun()">&#8635; Re-run</button>
   </div>
 </div>
 
 <div class="card">
-  <div class="card-title mb-2">Details</div>
-  <table>
-    <tr><th class="subtle">Type</th><td>{{ t.type }}</td></tr>
-    <tr><th class="subtle">Status</th><td><span class="badge {{ t.status }}">{{ t.status }}</span></td></tr>
-    <tr><th class="subtle">Triggered By</th><td>{{ t.triggered_by or '' }}</td></tr>
-    <tr><th class="subtle">Created</th><td>{{ t.created_at or '' }}</td></tr>
-    <tr><th class="subtle">Started</th><td>{{ t.started_at or '' }}</td></tr>
-    <tr><th class="subtle">Finished</th><td>{{ t.finished_at or '' }}</td></tr>
-    <tr><th class="subtle">Progress</th><td>{{ t.progress or 0 }}% {% if t.progress_text %}&mdash; {{ t.progress_text }}{% endif %}</td></tr>
-    <tr><th class="subtle">Prompt Tokens</th><td>{{ t.prompt_tokens or 0 }}</td></tr>
-    <tr><th class="subtle">Completion Tokens</th><td>{{ t.completion_tokens or 0 }}</td></tr>
-    <tr><th class="subtle">Cost</th><td>${{ "%.6f"|format(t.cost or 0) }}</td></tr>
-  </table>
+  <div class="card-header">
+    <span class="card-title">Summary</span>
+    <div class="gap-2">
+      <span class="badge {{ t.type }}">{{ t.type }}</span>
+      <span class="badge {{ t.status }}">{{ t.status }}</span>
+      {% if t.source %}<span class="badge badge-dim">{{ t.source }}</span>{% endif %}
+      {% if t.model %}<span class="badge badge-purple">{{ t.model }}</span>{% endif %}
+    </div>
+  </div>
+
+  <div id="monitor">
+    {% include "_task_monitor.html" %}
+  </div>
+
+  <div class="summary-grid">
+    <div class="metric"><span class="metric-label">Tokens</span><span class="mono">{{ t.tokens }}</span></div>
+    <div class="metric"><span class="metric-label">Cost</span><span class="mono">${{ "%.6f"|format(t.cost or 0) }}</span></div>
+    <div class="metric"><span class="metric-label">Duration</span><span class="mono">{{ t.duration or '—' }}</span></div>
+    <div class="metric"><span class="metric-label">Started</span><span class="mono">{{ t.started_fmt or '—' }}</span></div>
+    <div class="metric"><span class="metric-label">Finished</span><span class="mono">{{ t.finished_fmt or '—' }}</span></div>
+    <div class="metric"><span class="metric-label">Triggered By</span><span class="mono">{{ t.triggered_by or 'system' }}</span></div>
+  </div>
 </div>
 
-<div id="monitor">
-  {% include "_task_monitor.html" %}
+<div class="card">
+  <div class="card-title mb-2">Params</div>
+  <pre class="code">{{ t.params_pretty }}</pre>
 </div>
 
-<div class="card" style="border-color:var(--accent)">
-  <div class="card-title mb-2">Re-run / duplicate <span class="dim">(tweak any parameter)</span></div>
-  <button class="btn btn-xs" onclick="var f=document.getElementById('rerun-form'); f.style.display=f.style.display==='none'?'block':'none';">Toggle editor</button>
-  <div id="rerun-form" style="display:none;margin-top:10px">
+{% if t.result_pretty %}
+<div class="card">
+  <div class="card-title mb-2">Result</div>
+  <pre class="code">{{ t.result_pretty }}</pre>
+</div>
+{% endif %}
+
+{% if t.error %}
+<div class="card">
+  <div class="card-title mb-2">Error</div>
+  <pre class="code">{{ t.error }}</pre>
+</div>
+{% endif %}
+
+{% if ci %}
+<div class="card">
+  <a class="btn" href="/content/{{ ci.id }}/preview">Preview: {{ ci.title }}</a>
+</div>
+{% endif %}
+
+<!-- Re-run modal -->
+<div class="modal-overlay" id="rerun-modal" onclick="if(event.target===this)closeRerun()">
+  <div class="modal-box">
+    <div class="card-header">
+      <span class="card-title">Re-run / duplicate</span>
+      <button class="btn btn-xs" onclick="closeRerun()">&#10005;</button>
+    </div>
     <form onsubmit="return rerunTask(event)">
       {% for k, v in t.params_obj.items() %}
       <div class="rerun-row">
@@ -43,45 +78,20 @@
       {% endfor %}
       <div class="rerun-row">
         <label class="subtle">extra params (JSON object)</label>
-        <textarea name="extra_json" rows="3" style="width:100%"
+        <textarea name="extra_json" rows="3" class="w-full"
                   placeholder='{"description":"new prompt", "timeout":600, "rounds":4}'></textarea>
       </div>
-      <div class="mt-2">
+      <div class="mt-2 gap-2">
         <button type="submit" class="btn btn-primary btn-sm">Re-run as new task</button>
-        <span id="rerun-status" class="dim mt-2"></span>
+        <span id="rerun-status" class="dim flex-1"></span>
       </div>
     </form>
   </div>
 </div>
 
-<div class="card">
-  <div class="card-title mb-2">Params</div>
-  <pre style="white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:monospace;font-size:12px;margin:0;">{{ t.params_pretty }}</pre>
-</div>
-
-{% if t.error %}
-<div class="card">
-  <div class="card-title mb-2">Error</div>
-  <pre style="white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:monospace;font-size:12px;margin:0;">{{ t.error }}</pre>
-</div>
-{% endif %}
-
-{% if ci %}
-<div class="card">
-  <a class="btn" href="/content/{{ ci.id }}/preview">Preview: {{ ci.title }}</a>
-</div>
-{% endif %}
-
-{% if t.result_ref %}
-<div class="card">
-  <div class="card-title mb-2">Result</div>
-  <pre style="white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;font-family:monospace;font-size:12px;margin:0;">{{ t.result_ref }}</pre>
-</div>
-{% endif %}
-
-<a href="/tasks" class="btn">&larr; Back to Tasks</a>
-
 <script>
+function openRerun() { document.getElementById('rerun-modal').style.display = 'flex'; }
+function closeRerun() { document.getElementById('rerun-modal').style.display = 'none'; }
 async function rerunTask(e) {
   e.preventDefault();
   var s = document.getElementById('rerun-status');
