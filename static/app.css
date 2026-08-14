@@ -241,6 +241,14 @@ select option{background:var(--surface);color:var(--text)}
 .text-right{text-align:right}
 .truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
 .dim{color:var(--text-dim);font-size:11px}
+.detail-cell{max-width:280px}
+.detail-expand{max-width:280px}
+.detail-expand summary{cursor:pointer;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;list-style:none}
+.detail-expand summary::-webkit-details-marker{display:none}
+.detail-expand summary:before{content:"▸ ";color:var(--accent);font-size:9px}
+.detail-expand[open] summary{white-space:normal}
+.detail-expand[open] summary:before{content:"▾ "}
+.detail-full{margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;white-space:pre-wrap;word-break:break-word;color:var(--text);font-size:11px}
 .mt-1{margin-top:4px}
 .mt-2{margin-top:8px}
 .mt-3{margin-top:12px}

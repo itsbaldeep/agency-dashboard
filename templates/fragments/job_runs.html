@@ -13,7 +13,14 @@
       <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
       <td class="mono subtle">{{ r.started_at.strftime('%m/%d %H:%M') if r.started_at else '' }}</td>
       <td class="mono subtle">{{ r.duration_sec }}s</td>
-      <td class="subtle truncate">{{ r.detail[:80] if r.detail else '' }}</td>
+      <td class="detail-cell">
+        {% if r.detail %}
+        <details class="detail-expand">
+          <summary>{{ r.detail[:60] }}{% if r.detail|length > 60 %}&hellip;{% endif %}</summary>
+          <div class="detail-full">{{ r.detail }}</div>
+        </details>
+        {% endif %}
+      </td>
     </tr>
     {% else %}
     <tr><td colspan="5"><p class="empty">No runs yet</p></td></tr>
