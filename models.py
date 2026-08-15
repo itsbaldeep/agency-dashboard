@@ -225,10 +225,11 @@ def get_engagements():
                 created_at=c["created_at"], intake_params=c["intake_params"],
             ))
 
-        # Orphan projects (no client)
+        # Orphan projects (no client, no linked brand)
         cur.execute("""
             SELECT p.* FROM projects p
             WHERE p.id NOT IN (SELECT project_id FROM clients WHERE project_id IS NOT NULL)
+              AND p.id NOT IN (SELECT project_id FROM brands WHERE project_id IS NOT NULL)
             ORDER BY p.created_at DESC
         """)
         for p in cur.fetchall():
@@ -255,7 +256,7 @@ def get_engagements():
                 client_status="active", has_code=False,
                 brand_id=b["id"], brand_name=b["name"],
                 brand_slug=b["slug"], access_tier=b["access_tier"],
-                project_id=None, project_name=None, project_state=None, repo_url=None,
+                project_id=b["project_id"], project_name=None, project_state=None, repo_url=None,
                 created_at=b["created_at"], intake_params=None,
             ))
 
