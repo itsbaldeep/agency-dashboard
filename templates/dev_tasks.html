@@ -27,7 +27,7 @@
   <div class="card-title mb-2">Task History</div>
   <div class="table-wrap">
   <table>
-    <tr><th>ID</th><th>Repo</th><th>Description</th><th>Status</th><th>PR</th><th>Tokens</th><th>Cost</th><th>Created</th><th></th></tr>
+    <tr><th>ID</th><th>Repo</th><th>Description</th><th>Status</th><th>PR</th><th>Tokens</th><th>Cost</th><th>Created</th><th>Duration</th><th></th></tr>
     {% for t in tasks %}
     {% set pr = t.pr_data %}
     <tr>
@@ -38,11 +38,12 @@
       <td>{% if pr and pr.pr_url %}<a href="{{ pr.pr_url }}" target="_blank" style="font-size:11px">PR &#8599;</a>{% else %}<span class="dim">-</span>{% endif %}</td>
       <td class="mono">{{ (t.prompt_tokens or 0)+(t.completion_tokens or 0) }}</td>
       <td class="mono">${{ "%.6f"|format(t.cost or 0) }}</td>
-      <td class="mono subtle">{{ t.created_at[:16] if t.created_at else '' }}</td>
+      <td class="mono subtle">{{ t.created_fmt or '-' }}</td>
+      <td class="mono subtle">{{ t.duration or '-' }}</td>
       <td>{% if t.status == 'done' and pr and pr.pr_url %}<button class="btn btn-xs btn-green" onclick="mergePR({{ t.id }})">Merge</button>{% endif %}</td>
     </tr>
     {% else %}
-    <tr><td colspan="9"><p class="empty">No dev tasks yet</p></td></tr>
+    <tr><td colspan="10"><p class="empty">No dev tasks yet</p></td></tr>
     {% endfor %}
   </table>
   </div>
