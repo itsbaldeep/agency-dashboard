@@ -6,6 +6,23 @@
 </div>
 
 <div class="card" style="margin-bottom:20px;">
+  <div class="card-title mb-2">Add Competitor</div>
+  <form id="add-competitor-form" style="display:flex; gap:10px; flex-wrap:wrap;">
+    <select id="ac-brand" required>
+      <option value="">Brand…</option>
+      {% for b in brands %}
+      <option value="{{ b.id }}">{{ b.name }}{% if b.project_name %} ({{ b.project_name }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <input type="text" id="ac-name" placeholder="Name (optional)" style="flex:1; min-width:150px;">
+    <input type="text" id="ac-domain" placeholder="domain.com" required style="flex:1; min-width:180px;">
+    <input type="text" id="ac-sitemap" placeholder="sitemap URL (optional)" style="flex:1; min-width:180px;">
+    <button class="btn btn-green" type="submit">Add</button>
+  </form>
+  <div id="add-competitor-msg" class="subtle mt-2"></div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
   <div class="card-title mb-2">All Competitors</div>
   <table>
     <tr>
@@ -15,7 +32,7 @@
       <th class="subtle">Last Scanned</th>
       <th class="subtle">Total Pages</th>
       <th class="subtle">New (30d)</th>
-      <th class="subtle"></th>
+      <th class="subtle">Actions</th>
     </tr>
     {% for c in competitors %}
     <tr id="comp-row-{{ c.id }}">
@@ -31,7 +48,9 @@
       <td>{{ c.last_scanned_at.strftime('%Y-%m-%d %H:%M') if c.last_scanned_at else '—' }}</td>
       <td>{{ c.total_pages }}</td>
       <td>{{ c.recent_pages }}</td>
-      <td></td>
+      <td>
+        <button class="btn btn-sm" onclick="scanNow({{ c.id }})">Scan now</button>
+      </td>
     </tr>
     {% endfor %}
   </table>
@@ -78,5 +97,47 @@ async function toggleScan(cid) {
     }
   }
 }
+
+async function scanNow(cid) {
+  var btn = event.target;
+  var old = btn.textContent;
+  btn.textContent = 'Queuing…';
+  btn.disabled = true;
+  try {
+    var r = await fetch('/competitors/' + cid + '/scan', {method:'POST'});
+    var d = await r.json();
+    btn.textContent = d.ok ? 'Queued ✓' : 'Error';
+  } catch(e) {
+    btn.textContent = 'Error';
+  }
+  setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 3000);
+}
+
+document.getElementById('add-competitor-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  var msg = document.getElementById('add-competitor-msg');
+  var btn = this.querySelector('button[type=submit]');
+  var brand = document.getElementById('ac-brand').value;
+  var name = document.getElementById('ac-name').value.trim();
+  var domain = document.getElementById('ac-domain').value.trim();
+  var sitemap = document.getElementById('ac-sitemap').value.trim();
+  var body = new URLSearchParams({brand_id: brand, name: name, domain: domain, sitemap_url: sitemap});
+  btn.disabled = true;
+  btn.textContent = 'Adding…';
+  try {
+    var r = await fetch('/competitors/add', {method:'POST', body: body});
+    var d = await r.json();
+    if (d.ok) {
+      msg.textContent = 'Added — scanning now…';
+      location.reload();
+    } else {
+      msg.textContent = 'Error: ' + (d.error || 'unknown');
+    }
+  } catch(err) {
+    msg.textContent = 'Error: ' + err;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Add';
+});
 </script>
 {% endblock %}

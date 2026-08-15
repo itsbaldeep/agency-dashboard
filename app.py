@@ -633,6 +633,11 @@ def competitors():
             ORDER BY b.name, c.domain
         """)
         comps = cur.fetchall()
+        # Brands available for the add-competitor form
+        cur.execute("""SELECT b.id, b.name, p.name AS project_name
+                       FROM brands b LEFT JOIN projects p ON p.id = b.project_id
+                       ORDER BY b.name""")
+        brands = cur.fetchall()
         # Fetch recent non-baseline pages for enabled competitors
         recent_pages = {}
         for comp in comps:
@@ -648,9 +653,70 @@ def competitors():
                 LIMIT 25
             """, (comp["id"],))
             recent_pages[comp["id"]] = cur.fetchall()
-        return render_template("competitors.html", competitors=comps, recent_pages=recent_pages)
+        return render_template("competitors.html", competitors=comps, recent_pages=recent_pages, brands=brands)
     finally:
         conn.close()
+
+
+@app.route("/competitors/add", methods=["POST"])
+def competitor_add():
+    brand_id = request.form.get("brand_id", type=int)
+    name = request.form.get("name", "").strip()
+    domain = request.form.get("domain", "").strip().lower().removeprefix("https://").removeprefix("http://").removeprefix("www.")
+    sitemap_url = request.form.get("sitemap_url", "").strip()
+    if not brand_id:
+        return jsonify({"ok": False, "error": "brand_id is required"}), 400
+    if not domain:
+        return jsonify({"ok": False, "error": "domain is required"}), 400
+    if not re.fullmatch(r"[a-z0-9.\-]+\.[a-z]{2,}", domain):
+        return jsonify({"ok": False, "error": "invalid domain"}), 400
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM brands WHERE id=%s", (brand_id,))
+        if not cur.fetchone():
+            return jsonify({"ok": False, "error": "brand not found"}), 404
+        cur.execute(
+            "INSERT INTO competitors (brand_id, domain, name, scan_enabled, sitemap_url) "
+            "VALUES (%s, %s, %s, true, %s) RETURNING id",
+            (brand_id, domain, name or domain.split(".")[0].title(), sitemap_url or None))
+        comp_id = cur.fetchone()["id"]
+        params = json.dumps({"competitor_id": comp_id})
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('competitor_scan', 'queued', %s, 'dashboard') RETURNING id", (params,))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "id": comp_id})
+
+
+@app.route("/competitors/<int:cid>/scan", methods=["POST"])
+def competitor_scan_now(cid):
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, scan_enabled FROM competitors WHERE id=%s", (cid,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        # Scans are explicit opt-in; scanning now implies opting in.
+        if not row["scan_enabled"]:
+            cur.execute("UPDATE competitors SET scan_enabled=true WHERE id=%s", (cid,))
+        params = json.dumps({"competitor_id": cid})
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('competitor_scan', 'queued', %s, 'dashboard') RETURNING id", (params,))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "task_id": task_id})
 
 
 @app.route("/competitors/<int:cid>/toggle", methods=["POST"])
