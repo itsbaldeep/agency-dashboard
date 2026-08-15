@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Competitors</h1>
+  <div class="sub">Tracked competitor sites and discovered pages</div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-title mb-2">All Competitors</div>
+  <table>
+    <tr>
+      <th class="subtle">Brand</th>
+      <th class="subtle">Domain</th>
+      <th class="subtle">Scan</th>
+      <th class="subtle">Last Scanned</th>
+      <th class="subtle">Total Pages</th>
+      <th class="subtle">New (30d)</th>
+      <th class="subtle"></th>
+    </tr>
+    {% for c in competitors %}
+    <tr id="comp-row-{{ c.id }}">
+      <td>{{ c.brand_name or '—' }}</td>
+      <td><a href="https://{{ c.domain }}" target="_blank">{{ c.domain }}</a></td>
+      <td>
+        <button class="btn btn-sm {% if c.scan_enabled %}btn-green{% endif %}"
+                onclick="toggleScan({{ c.id }})"
+                id="scan-btn-{{ c.id }}">
+          {% if c.scan_enabled %}ON{% else %}OFF{% endif %}
+        </button>
+      </td>
+      <td>{{ c.last_scanned_at.strftime('%Y-%m-%d %H:%M') if c.last_scanned_at else '—' }}</td>
+      <td>{{ c.total_pages }}</td>
+      <td>{{ c.recent_pages }}</td>
+      <td></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% for c in competitors %}
+{% if c.scan_enabled and recent_pages.get(c.id) %}
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header">
+    <span class="card-title">Recent pages — {{ c.domain }}</span>
+    <span class="subtle">{{ recent_pages[c.id]|length }} shown</span>
+  </div>
+  <div class="card-list">
+    {% for p in recent_pages[c.id] %}
+    <div class="card-list-item">
+      <div class="card-list-main">
+        <span>{{ p.title or p.url }}</span>
+        <a class="btn btn-sm" href="/content/new?url={{ p.url }}">Research</a>
+      </div>
+      <div class="card-list-sub">
+        <a href="{{ p.url }}" target="_blank">{{ p.url }}</a>
+        {% if p.lastmod %} &middot; lastmod {{ p.lastmod.strftime('%Y-%m-%d') }}{% endif %}
+        &middot; first seen {{ p.first_seen_at.strftime('%Y-%m-%d %H:%M') if p.first_seen_at else '' }}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+<script>
+async function toggleScan(cid) {
+  var btn = document.getElementById('scan-btn-' + cid);
+  var r = await fetch('/competitors/' + cid + '/toggle', {method:'POST'});
+  var d = await r.json();
+  if (d.ok) {
+    if (d.scan_enabled) {
+      btn.textContent = 'ON';
+      btn.classList.add('btn-green');
+    } else {
+      btn.textContent = 'OFF';
+      btn.classList.remove('btn-green');
+    }
+  }
+}
+</script>
+{% endblock %}
