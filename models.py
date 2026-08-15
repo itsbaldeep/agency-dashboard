@@ -172,7 +172,7 @@ def _caddy_sites():
 def _engagement_row(ref_type, ref_id, name, onboarding, client_status, has_code,
                     brand_id, brand_name, brand_slug, access_tier,
                     project_id, project_name, project_state, repo_url,
-                    created_at, intake_params):
+                    created_at, intake_params, agent_allowed=False):
     return {
         "ref_type": ref_type, "ref_id": ref_id,
         "name": name or project_name or brand_name or "Unknown",
@@ -183,9 +183,24 @@ def _engagement_row(ref_type, ref_id, name, onboarding, client_status, has_code,
         "access_tier": access_tier or "0",
         "project_id": project_id, "project_name": project_name,
         "project_state": project_state, "repo_url": repo_url,
+        "agent_allowed": agent_allowed,
         "created_at": created_at,
         "intake_params": intake_params,
+        "last_audit_date": None, "audit_count": 0,
+        "suggestion_pending": 0, "content_count": 0,
+        "content_draft_count": 0, "has_report": False,
+        "capability_count": 0, "last_activity": None,
     }
+
+
+def _engagement_type_badge(e):
+    """Classify an engagement as Black-box / Code / Scaffolded."""
+    if e.get("project_id") and e.get("project_state") in (
+            "scaffolded", "building", "preview", "staged", "live"):
+        return "Scaffolded"
+    if e.get("has_code") or e.get("project_id"):
+        return "Code"
+    return "Black-box"
 
 
 def get_engagements():
@@ -247,7 +262,7 @@ def get_engagements():
     finally:
         conn.close()
 
-    # Fetch linked names for client rows
+    # Fetch linked names + agent_allowed for client rows
     conn2 = db()
     try:
         cur2 = conn2.cursor()
@@ -257,17 +272,105 @@ def get_engagements():
                 r = cur2.fetchone()
                 if r: e["brand_name"] = r["name"]
             if e["project_id"]:
-                cur2.execute("SELECT name, state, repo_url FROM projects WHERE id=%s", (e["project_id"],))
+                cur2.execute("SELECT name, state, repo_url, agent_allowed FROM projects WHERE id=%s", (e["project_id"],))
                 r = cur2.fetchone()
                 if r:
                     e["project_name"] = r["name"]
                     e["project_state"] = r["state"]
                     e["repo_url"] = r["repo_url"]
+                    e["agent_allowed"] = bool(r["agent_allowed"])
     finally:
         conn2.close()
 
-    engs.sort(key=lambda e: e["created_at"] or datetime.min, reverse=True)
+    _enrich_engagements(engs)
+    engs.sort(key=lambda e: e["last_activity"] or e["created_at"] or datetime.min, reverse=True)
     return engs
+
+
+def _enrich_engagements(engs):
+    """Bulk-fetch per-engagement metrics (audits, suggestions, content, tasks,
+    capabilities) and merge them into the engagement dicts in place."""
+    brand_ids = [e["brand_id"] for e in engs if e["brand_id"]]
+    project_ids = [e["project_id"] for e in engs if e["project_id"]]
+    if not brand_ids and not project_ids:
+        return
+    conn = db()
+    try:
+        cur = conn.cursor()
+        # ── Brand-scoped metrics (audits, suggestions, content) ──
+        if brand_ids:
+            cur.execute("""
+                SELECT b.id AS brand_id,
+                    (SELECT max(created_at) FROM audits WHERE brand_id=b.id) AS last_audit_date,
+                    (SELECT count(*) FROM audits WHERE brand_id=b.id) AS audit_count,
+                    (SELECT count(*) FROM suggestions WHERE brand_id=b.id AND status='pending') AS suggestion_pending,
+                    (SELECT count(*) FROM content_items WHERE brand_id=b.id) AS content_count,
+                    (SELECT count(*) FROM content_items WHERE brand_id=b.id AND status='draft') AS content_draft_count
+                FROM brands b WHERE b.id = ANY(%s)
+            """, (brand_ids,))
+            bmap = {r["brand_id"]: r for r in cur.fetchall()}
+            # Brand-scoped task activity (params->>'brand_id')
+            cur.execute("""
+                SELECT (params->>'brand_id')::int AS bid, max(created_at) AS last_activity
+                FROM tasks WHERE (params->>'brand_id')::int = ANY(%s)
+                GROUP BY bid
+            """, (brand_ids,))
+            tmap = {r["bid"]: r["last_activity"] for r in cur.fetchall()}
+        else:
+            bmap, tmap = {}, {}
+
+        # ── Project-scoped metrics (capabilities + task activity) ──
+        if project_ids:
+            cur.execute("""
+                SELECT project_id, count(*) AS capability_count
+                FROM capabilities WHERE project_id = ANY(%s::bigint[])
+                GROUP BY project_id
+            """, (project_ids,))
+            cmap = {r["project_id"]: r["capability_count"] for r in cur.fetchall()}
+            cur.execute("""
+                SELECT (params->>'project_id')::bigint AS pid, max(created_at) AS last_activity
+                FROM tasks WHERE (params->>'project_id')::bigint = ANY(%s::bigint[])
+                GROUP BY pid
+            """, (project_ids,))
+            ptask = {r["pid"]: r["last_activity"] for r in cur.fetchall()}
+        else:
+            cmap, ptask = {}, {}
+
+        for e in engs:
+            bid = e["brand_id"]
+            if bid and bid in bmap:
+                m = bmap[bid]
+                e["last_audit_date"] = m["last_audit_date"]
+                e["audit_count"] = m["audit_count"] or 0
+                e["suggestion_pending"] = m["suggestion_pending"] or 0
+                e["content_count"] = m["content_count"] or 0
+                e["content_draft_count"] = m["content_draft_count"] or 0
+                e["has_report"] = (m["audit_count"] or 0) > 0
+                if bid in tmap:
+                    e["last_activity"] = tmap[bid]
+            pid = e["project_id"]
+            if pid and pid in cmap:
+                e["capability_count"] = cmap[pid]
+            if pid and pid in ptask:
+                la = ptask[pid]
+                if not e["last_activity"] or (la and la > e["last_activity"]):
+                    e["last_activity"] = la
+            # Fall back to last_audit_date if no task activity yet
+            if not e["last_activity"] and e["last_audit_date"]:
+                e["last_activity"] = e["last_audit_date"]
+            # Audit age in days (for color coding); None if no audit
+            lad = e["last_audit_date"]
+            if lad:
+                try:
+                    if lad.tzinfo is None:
+                        lad = lad.replace(tzinfo=timezone.utc)
+                    e["audit_age_days"] = (datetime.now(timezone.utc) - lad).days
+                except Exception:
+                    e["audit_age_days"] = None
+            else:
+                e["audit_age_days"] = None
+    finally:
+        conn.close()
 
 
 def get_engagement_detail(ref_type, ref_id):

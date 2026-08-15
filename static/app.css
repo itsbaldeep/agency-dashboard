@@ -210,10 +210,17 @@ select option{background:var(--surface);color:var(--text)}
   transition:all var(--transition);
 }
 .eng-card:hover{border-color:var(--border-hover);transform:translateY(-1px);box-shadow:var(--shadow)}
+.eng-card .eng-card-name{color:var(--text-bright);text-decoration:none;flex:1}
+.eng-card .eng-card-name:hover{color:var(--accent)}
 .eng-card-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .eng-card-name{font-weight:600;font-size:14px;color:var(--text-bright);flex:1}
 .eng-card-meta{font-size:11px;color:var(--text-muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .eng-card-detail{margin-top:8px;display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--text-dim)}
+
+/* Engagement type badges */
+.badge-type-black-box{background:var(--purple-dim);color:var(--purple)}
+.badge-type-code{background:var(--accent-glow);color:var(--accent)}
+.badge-type-scaffolded{background:var(--green-dim);color:var(--green)}
 
 /* ── Detail sections ────────────────────────────────────── */
 .section-tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border)}

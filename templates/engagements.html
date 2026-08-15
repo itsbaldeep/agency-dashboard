@@ -8,21 +8,76 @@
 <div class="card" style="border-color:var(--accent)">
   <div class="card-header">
     <span class="card-title">New Engagement</span>
+    <span class="subtle">Name + URL is enough to start — everything else is optional.</span>
   </div>
-  <div class="onboard-form">
-    <div>
-      <div class="subtle mb-2">Type</div>
-      <select id="onboard-type" onchange="updateOnboardForm()">
-        <option value="marketing_only">Marketing Only (audit)</option>
-        <option value="existing_code_marketing">Existing Code + Marketing</option>
-        <option value="clean_slate">Clean Slate (new project)</option>
-      </select>
+  <div class="onboard-form" style="grid-template-columns:1fr">
+    <div class="gap-2">
+      <div>
+        <div class="subtle mb-2">Type</div>
+        <select id="onboard-type" onchange="updateOnboardForm()">
+          <option value="marketing_only">Marketing Only (audit)</option>
+          <option value="existing_code_marketing">Existing Code + Marketing</option>
+          <option value="clean_slate">Clean Slate (new project)</option>
+        </select>
+      </div>
+      <div>
+        <div class="subtle mb-2">Brand / Client name <span style="color:var(--red)">*</span></div>
+        <input type="text" id="onboard-name" placeholder="e.g. Local Ferment Co">
+      </div>
+      <div>
+        <div class="subtle mb-2" id="onboard-label">Website URL (domain) <span style="color:var(--red)">*</span></div>
+        <input type="text" id="onboard-input" placeholder="e.g. localfermentco.in">
+      </div>
     </div>
-    <div>
-      <div class="subtle mb-2" id="onboard-label">Domain</div>
-      <input type="text" id="onboard-input" placeholder="e.g. localfermentco.in">
+
+    <details class="mt-2" style="border-top:1px solid var(--border);padding-top:10px">
+      <summary class="subtle" style="cursor:pointer">Optional enrichment fields</summary>
+      <div class="gap-2 mt-2">
+        <div>
+          <div class="subtle mb-2">Industry / Category <span class="dim">(optional)</span></div>
+          <input type="text" id="onboard-industry" placeholder="e.g. Food & Beverage, Wellness, SaaS">
+        </div>
+        <div>
+          <div class="subtle mb-2">Target market <span class="dim">(optional)</span></div>
+          <input type="text" id="onboard-target-market" placeholder="e.g. Delhi/NCR, India, Global">
+        </div>
+        <div>
+          <div class="subtle mb-2">Target audience <span class="dim">(optional)</span></div>
+          <input type="text" id="onboard-target-audience" placeholder="e.g. Health-conscious millennials">
+        </div>
+        <div>
+          <div class="subtle mb-2">Business stage <span class="dim">(optional)</span></div>
+          <select id="onboard-business-stage">
+            <option value="">—</option>
+            <option value="early">Early</option>
+            <option value="growth">Growth</option>
+            <option value="mature">Mature</option>
+          </select>
+        </div>
+        <div>
+          <div class="subtle mb-2">Primary sales channel <span class="dim">(optional)</span></div>
+          <select id="onboard-sales-channel">
+            <option value="">—</option>
+            <option value="DTC ecommerce">DTC ecommerce</option>
+            <option value="retail">Retail</option>
+            <option value="wholesale-B2B">Wholesale / B2B</option>
+            <option value="marketplace">Marketplace</option>
+          </select>
+        </div>
+        <div>
+          <div class="subtle mb-2">Known competitors <span class="dim">(optional, one per line: "domain" or "name,domain")</span></div>
+          <textarea id="onboard-competitors" rows="3" placeholder="acmecorp.com&#10;Big Co, bigco.in"></textarea>
+        </div>
+        <div>
+          <div class="subtle mb-2">Description / notes <span class="dim">(optional)</span></div>
+          <textarea id="onboard-description" rows="2" placeholder="Any context that helps the audit"></textarea>
+        </div>
+      </div>
+    </details>
+
+    <div class="mt-2">
+      <button class="btn btn-primary" onclick="onboard()">Start</button>
     </div>
-    <button class="btn btn-primary" onclick="onboard()">Start</button>
   </div>
   <div id="onboard-status" class="mt-2"></div>
 </div>
@@ -40,18 +95,34 @@ function updateOnboardForm() {
   var t = document.getElementById('onboard-type').value;
   var l = document.getElementById('onboard-label');
   var i = document.getElementById('onboard-input');
-  if (t === 'marketing_only') { l.textContent = 'Domain'; i.placeholder = 'e.g. localfermentco.in'; }
-  else if (t === 'existing_code_marketing') { l.textContent = 'Git repo URL'; i.placeholder = 'e.g. github.com/org/repo'; }
-  else { l.textContent = 'Brief description'; i.placeholder = 'e.g. landing page for wellness brand'; }
+  if (t === 'marketing_only') { l.innerHTML = 'Website URL (domain) <span style="color:var(--red)">*</span>'; i.placeholder = 'e.g. localfermentco.in'; }
+  else if (t === 'existing_code_marketing') { l.innerHTML = 'Git repo URL <span style="color:var(--red)">*</span>'; i.placeholder = 'e.g. github.com/org/repo'; }
+  else { l.innerHTML = 'Brief description <span style="color:var(--red)">*</span>'; i.placeholder = 'e.g. landing page for wellness brand'; }
 }
+function _form(name) { var el = document.getElementById('onboard-'+name); return el ? el.value.trim() : ''; }
 async function onboard() {
-  var type = document.getElementById('onboard-type').value;
-  var input = document.getElementById('onboard-input').value.trim();
+  var type = _form('type');
+  var input = _form('input');
+  var name = _form('name');
   if (!input) { return; }
   var s = document.getElementById('onboard-status');
   s.innerHTML = '<div class="card" style="padding:10px;font-size:12px">Starting...</div>';
+  var params = new URLSearchParams();
+  params.set('type', type);
+  params.set('input', input);
+  if (name) params.set('name', name);
+  ['industry','target-market','target-audience','business-stage','sales-channel','competitors','description'].forEach(function(k){
+    var v = _form(k);
+    if (v) {
+      var key = k === 'target-market' ? 'target_market'
+              : k === 'target-audience' ? 'target_audience'
+              : k === 'business-stage' ? 'business_stage'
+              : k === 'sales-channel' ? 'primary_sales_channel' : k;
+      params.set(key, v);
+    }
+  });
   try {
-    var r = await fetch('/onboard', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'type='+encodeURIComponent(type)+'&input='+encodeURIComponent(input) });
+    var r = await fetch('/onboard', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:params.toString() });
     var d = await r.json();
     if (!d.ok) { s.innerHTML = '<div class="card" style="padding:10px;font-size:12px;color:var(--red)">'+d.error+'</div>'; return; }
     if (d.task_id) {

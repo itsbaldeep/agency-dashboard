@@ -342,7 +342,8 @@ def brand_report(brand_id):
 def onboard_client():
     ctype = request.form.get("type", "").strip()
     user_input = request.form.get("input", "").strip()
-    client_name = request.form.get("name", "").strip() or user_input.split(".")[0].title() if ctype == "black_box" else user_input[:50]
+    client_name = request.form.get("name", "").strip() or (
+        user_input.split(".")[0].title() if ctype == "black_box" else user_input[:50])
 
     if not ctype or ctype not in ("marketing_only", "existing_code_marketing", "clean_slate"):
         return jsonify({"ok": False, "error": "valid type required"}), 400
@@ -353,11 +354,61 @@ def onboard_client():
     legacy_map = {"marketing_only": "black_box", "existing_code_marketing": "import_repo", "clean_slate": "new_project"}
     legacy_type = legacy_map[ctype]
 
+    # Optional enrichment fields (name + URL is enough; these are gravy)
+    f_industry = request.form.get("industry", "").strip()
+    f_target_market = request.form.get("target_market", "").strip()
+    f_target_audience = request.form.get("target_audience", "").strip()
+    f_business_stage = request.form.get("business_stage", "").strip()
+    f_sales_channel = request.form.get("primary_sales_channel", "").strip()
+    f_description = request.form.get("description", "").strip()
+    f_competitors_raw = request.form.get("competitors", "").strip()
+
+    def _add_brand_property(cur, bid, ptype, value):
+        if not value:
+            return
+        cur.execute(
+            "INSERT INTO brand_properties (brand_id, property_type, value, accessible) "
+            "VALUES (%s, %s, %s, true) ON CONFLICT DO NOTHING",
+            (bid, ptype, value))
+
+    def _insert_competitors(cur, bid, raw):
+        if not raw:
+            return
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Parse "domain" or "name,domain"
+            if "," in line:
+                cname, cdomain = line.split(",", 1)
+                cname, cdomain = cname.strip(), cdomain.strip().lower()
+            else:
+                cname, cdomain = "", line.strip().lower()
+            cdomain = (cdomain.removeprefix("https://").removeprefix("http://")
+                              .removeprefix("www."))
+            if not cdomain or not re.fullmatch(r"[a-z0-9.\-]+\.[a-z]{2,}", cdomain):
+                continue
+            if not cname:
+                cname = cdomain.split(".")[0].title()
+            cur.execute(
+                "INSERT INTO competitors (brand_id, domain, name, scan_enabled) "
+                "VALUES (%s, %s, %s, false) ON CONFLICT DO NOTHING",
+                (bid, cdomain, cname))
+
+    def _enrich_brand(cur, bid):
+        _add_brand_property(cur, bid, "category", f_industry)
+        _add_brand_property(cur, bid, "target_market", f_target_market)
+        _add_brand_property(cur, bid, "target_audience", f_target_audience)
+        _add_brand_property(cur, bid, "business_stage", f_business_stage)
+        _add_brand_property(cur, bid, "primary_sales_channel", f_sales_channel)
+        if f_description:
+            _add_brand_property(cur, bid, "description", f_description)
+        _insert_competitors(cur, bid, f_competitors_raw)
+
     try:
         conn = models.db()
         cur = conn.cursor()
         brand_id = None
-        project_id_task = None
 
         if ctype == "marketing_only":
             domain = user_input
@@ -365,6 +416,7 @@ def onboard_client():
             cur.execute("INSERT INTO brands (name, slug, access_tier) VALUES (%s, %s, '0') ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name RETURNING id", (client_name, slug))
             brand_id = cur.fetchone()["id"]
             cur.execute("INSERT INTO brand_properties (brand_id, property_type, value, accessible) VALUES (%s, 'domain', %s, true) ON CONFLICT DO NOTHING", (brand_id, domain))
+            _enrich_brand(cur, brand_id)
             intake = json.dumps({"domain": domain})
             cur.execute("INSERT INTO clients (name, type, status, brand_id, intake_params) VALUES (%s, 'black_box', 'queued', %s, %s) RETURNING id", (client_name, brand_id, intake))
             client_id = cur.fetchone()["id"]
