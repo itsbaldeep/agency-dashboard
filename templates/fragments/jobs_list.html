@@ -3,6 +3,10 @@
      hx-trigger="every 10s"
      hx-select="#jobs-main"
      hx-swap="outerHTML">
+<script>
+async function toggleJob(jid){await fetch('/operations/jobs/'+jid+'/toggle',{method:'POST'});htmx.ajax('GET','/operations/jobs',{target:'#jobs-main',select:'#jobs-main',swap:'outerHTML'})}
+async function runJob(jid){await fetch('/operations/jobs/'+jid+'/run',{method:'POST'});htmx.ajax('GET','/operations/jobs',{target:'#jobs-main',select:'#jobs-main',swap:'outerHTML'})}
+</script>
   <div class="card-header"><span class="card-title">Background Jobs</span></div>
   {% for j in jobs %}
   <div class="job-row">
@@ -23,7 +27,3 @@
   <p class="empty">No jobs defined</p>
   {% endfor %}
 </div>
-<script>
-async function toggleJob(jid){await fetch('/operations/jobs/'+jid+'/toggle',{method:'POST'});setTimeout(function(){htmx.trigger('#jobs-main','load')},200)}
-async function runJob(jid){await fetch('/operations/jobs/'+jid+'/run',{method:'POST'});setTimeout(function(){htmx.trigger('#jobs-main','load')},200)}
-</script>
