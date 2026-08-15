@@ -10,6 +10,9 @@
         {% endfor %}
       {% endif %}
       <button class="btn btn-sm" onclick="document.getElementById('audit-form').style.display='block'">Run Audit</button>
+      {% if eng.brand_id %}
+      <a href="/engagements/brand/{{ eng.brand_id }}/report" class="btn btn-sm btn-primary" style="font-weight:600">&#128202; Full Report</a>
+      {% endif %}
     </span>
   </div>
 

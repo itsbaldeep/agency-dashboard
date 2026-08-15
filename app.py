@@ -137,77 +137,202 @@ def engagement_activity(ref_type, ref_id):
     return render_template("fragments/engagement_activity.html", **data)
 
 
+def _parse_jsonb(v):
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return v or {}
+
+
 @app.route("/engagements/brand/<int:brand_id>/report")
 def brand_report(brand_id):
     conn = models.db()
+    project_id = None
+    agent_allowed = False
+    repo_url = None
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id, name, slug, access_tier FROM brands WHERE id=%s", (brand_id,))
+        cur.execute("SELECT * FROM brands WHERE id=%s", (brand_id,))
         brand = cur.fetchone()
         if not brand:
             return redirect("/engagements")
+        project_id = brand.get("project_id")
         cur.execute("SELECT property_type, value FROM brand_properties WHERE brand_id=%s", (brand_id,))
         brand_properties = cur.fetchall()
-        cur.execute("SELECT domain, name FROM competitors WHERE brand_id=%s ORDER BY domain", (brand_id,))
+
+        if project_id:
+            cur.execute("SELECT agent_allowed, repo_url FROM projects WHERE id=%s", (project_id,))
+            prow = cur.fetchone()
+            if prow:
+                agent_allowed = bool(prow.get("agent_allowed"))
+                repo_url = prow.get("repo_url")
+
+        cur.execute(
+            "SELECT id, domain, name, scan_enabled, last_scanned_at, sitemap_url, "
+            "(SELECT count(*) FROM competitor_pages cp WHERE cp.competitor_id=c.id) as page_count, "
+            "(SELECT max(lastmod) FROM competitor_pages cp WHERE cp.competitor_id=c.id) as most_recent_page "
+            "FROM competitors c WHERE c.brand_id=%s ORDER BY c.domain", (brand_id,))
         competitors = cur.fetchall()
+
         cur.execute("SELECT * FROM audits WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1", (brand_id,))
         audit = cur.fetchone()
+
+        cur.execute(
+            "SELECT id, audit_type, created_at, summary->>'brand_share_of_voice_pct' as vis_pct, "
+            "summary->>'confidence' as confidence FROM audits WHERE brand_id=%s ORDER BY created_at DESC LIMIT 10",
+            (brand_id,))
+        audit_history = cur.fetchall()
     finally:
         conn.close()
 
     audit_summary = {}
     audit_sources = []
-    suggestions = []
     if audit:
-        s = audit.get("summary")
-        if isinstance(s, str):
-            try:
-                audit_summary = json.loads(s)
-            except (json.JSONDecodeError, TypeError):
-                audit_summary = {}
-        else:
-            audit_summary = s or {}
-        src = audit.get("sources")
-        if isinstance(src, str):
-            try:
-                audit_sources = json.loads(src)
-            except (json.JSONDecodeError, TypeError):
-                audit_sources = []
-        else:
-            audit_sources = src or []
+        audit_summary = _parse_jsonb(audit.get("summary"))
+        audit_sources = _parse_jsonb(audit.get("sources")) or []
+        if not isinstance(audit_sources, list):
+            audit_sources = []
+
+    capabilities = []
+    if project_id:
         conn = models.db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT * FROM suggestions WHERE audit_id=%s ORDER BY impact, created_at", (audit["id"],))
-            suggestions = cur.fetchall()
-            for sg in suggestions:
-                cf = sg.get("compliance_flags")
-                if isinstance(cf, str):
-                    try:
-                        sg["compliance_flags"] = json.loads(cf)
-                    except (json.JSONDecodeError, TypeError):
-                        sg["compliance_flags"] = []
-                elif cf is None:
-                    sg["compliance_flags"] = []
+            cur.execute(
+                "SELECT capability, status, evidence, checked_at FROM capabilities "
+                "WHERE project_id=%s ORDER BY capability", (project_id,))
+            for row in cur.fetchall():
+                row = dict(row)
+                row["evidence"] = _parse_jsonb(row.get("evidence"))
+                row["checked_fmt"] = fmt_ts(row.get("checked_at"))
+                capabilities.append(row)
+        except Exception:
+            capabilities = []
+        finally:
+            conn.close()
+
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, title, rationale, impact, effort, action_type, status, "
+            "compliance_flags, sources, audit_id, brand_id, created_at "
+            "FROM suggestions WHERE brand_id=%s ORDER BY impact DESC, created_at DESC", (brand_id,))
+        suggestions = cur.fetchall()
+        for sg in suggestions:
+            sg["compliance_flags"] = _parse_jsonb(sg.get("compliance_flags")) or []
+            if not isinstance(sg["compliance_flags"], list):
+                sg["compliance_flags"] = []
+            sg["sources"] = _parse_jsonb(sg.get("sources")) or []
+        cur.execute(
+            "SELECT id, title, status, content_type, created_at, updated_at, suggestion_id "
+            "FROM content_items WHERE brand_id=%s ORDER BY updated_at DESC", (brand_id,))
+        content_items = cur.fetchall()
+        cur.execute(
+            "SELECT id, type, status, created_at, finished_at, left(error,120) as error "
+            "FROM tasks WHERE (params->>'brand_id')::text = %s "
+            "ORDER BY created_at DESC LIMIT 10", (str(brand_id),))
+        recent_tasks = cur.fetchall()
+    except Exception:
+        content_items = []
+        recent_tasks = []
+    finally:
+        conn.close()
+
+    sug_ids = [s["id"] for s in suggestions]
+    content_by_suggestion = {}
+    for ci in content_items:
+        sid = ci.get("suggestion_id")
+        if sid and sid not in content_by_suggestion:
+            content_by_suggestion[sid] = ci
+
+    task_by_suggestion = {}
+    if sug_ids:
+        conn = models.db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, type, status, params->>'suggestion_id' as sug_id "
+                "FROM tasks WHERE params->>'suggestion_id' = ANY(%s) "
+                "ORDER BY id DESC", (list(map(str, sug_ids)),))
+            for t in cur.fetchall():
+                sid = t.get("sug_id")
+                try:
+                    sid = int(sid) if sid else None
+                except (ValueError, TypeError):
+                    sid = None
+                if sid and sid not in task_by_suggestion:
+                    task_by_suggestion[sid] = t
+        except Exception:
+            pass
         finally:
             conn.close()
 
     visibility_rows = []
-    if audit:
+    ch_error = False
+    try:
         cols, rows = models.ch_query(
-            "SELECT prompt, cited, position, competitors_cited, detail "
+            "SELECT prompt, cited, position, competitors_cited, detail, ts "
             "FROM default.ai_visibility_checks "
             f"WHERE brand_id = {int(brand_id)} "
-            "ORDER BY ts "
+            "ORDER BY ts DESC LIMIT 50 "
             "FORMAT TabSeparatedWithNames"
         )
         visibility_rows = [dict(zip(cols, row)) for row in rows] if cols else []
+    except Exception:
+        ch_error = True
+
+    domain = audit_summary.get("domain") or ""
+    if not domain:
+        for p in brand_properties:
+            if p.get("property_type") == "domain" and p.get("value"):
+                domain = p["value"]
+                break
+
+    audit_date_fmt = ""
+    if audit and audit.get("created_at"):
+        try:
+            d = audit["created_at"]
+            if isinstance(d, str):
+                d = datetime.fromisoformat(d.replace("Z", "+00:00"))
+            audit_date_fmt = d.strftime("%b %d, %Y %H:%M")
+        except Exception:
+            audit_date_fmt = str(audit["created_at"])
+
+    for a in audit_history:
+        a["created_fmt"] = fmt_ts(a.get("created_at"))
+
+    for c in competitors:
+        c["last_scanned_fmt"] = fmt_ts(c.get("last_scanned_at"))
+        if c.get("most_recent_page"):
+            try:
+                d = c["most_recent_page"]
+                if isinstance(d, str):
+                    d = datetime.fromisoformat(d.replace("Z", "+00:00"))
+                c["most_recent_page_fmt"] = d.strftime("%b %d, %Y")
+            except Exception:
+                c["most_recent_page_fmt"] = str(c.get("most_recent_page"))
+
+    for t in recent_tasks:
+        t["created_fmt"] = fmt_ts(t.get("created_at"))
+
+    for ci in content_items:
+        ci["updated_fmt"] = fmt_ts(ci.get("updated_at"))
 
     return render_template("brand_report.html", active='engagements',
                            brand=brand, brand_properties=brand_properties,
-                           competitors=competitors, audit=audit,
+                           domain=domain, competitors=competitors, audit=audit,
                            audit_summary=audit_summary, audit_sources=audit_sources,
+                           audit_history=audit_history, audit_date_fmt=audit_date_fmt,
                            suggestions=suggestions, visibility_rows=visibility_rows,
+                           ch_error=ch_error, capabilities=capabilities,
+                           content_items=content_items, recent_tasks=recent_tasks,
+                           content_by_suggestion=content_by_suggestion,
+                           task_by_suggestion=task_by_suggestion,
+                           agent_allowed=agent_allowed, repo_url=repo_url,
+                           project_id=project_id,
                            summary_json=json.dumps(audit_summary, indent=2, default=str) if audit_summary else "")
 
 

@@ -1,95 +1,215 @@
 {% extends "base.html" %}
 {% block content %}
-<a href="/engagements/brand/{{ brand.id }}" style="font-size:12px;color:var(--text-muted)">&larr; Back to engagement</a>
-
-{% set ns = namespace(domain=audit_summary.get('domain') or '') %}
-{% if not ns.domain %}
-  {% for p in brand_properties %}{% if p.property_type == 'domain' and not ns.domain %}{% set ns.domain = p.value %}{% endif %}{% endfor %}
-{% endif %}
-{% set domain = ns.domain %}
-
-<div class="page-header">
-  <div class="card-header">
-    <div>
-      <h1>{{ brand.name }}</h1>
-      <div class="sub">
-        {% if domain %}<span class="mono">{{ domain }}</span> &middot; {% endif %}
-        {% if audit and audit.created_at %}<span class="mono">{{ audit.created_at.strftime('%b %d, %Y %H:%M') }}</span>{% else %}<span>No audit</span>{% endif %}
-      </div>
-    </div>
-    <span class="gap-2">
-      {% if domain %}<a href="https://{{ domain }}" target="_blank" class="btn btn-sm">Visit Site &#8599;</a>{% endif %}
-      <a href="#" class="btn btn-sm" onclick="window.print();return false">Download</a>
-    </span>
-  </div>
-</div>
-
-{% if not audit %}
-<div class="card"><p class="empty">No audit yet — run one first.</p></div>
-{% else %}
 
 {% set conf = audit_summary.get('confidence','normal') %}
 {% set gap = audit_summary.get('competitor_gap') %}
 {% set gate = audit_summary.get('visibility_gate_blocked') %}
 {% set mt = audit_summary.get('market_tier') or {} %}
 {% set sov = audit_summary.get('brand_share_of_voice_pct',0) %}
+{% set sov_num = sov|float %}
+{% set comps = audit_summary.get('competitors') or [] %}
+{% set cite_counts = audit_summary.get('competitor_citation_counts') or {} %}
+{% set all_cite = audit_summary.get('all_competitors_total_citations',0) %}
+{% set prompts_used = audit_summary.get('prompts_used') or [] %}
+{% set prompts_queried = audit_summary.get('prompts_queried',0) %}
+{% set brand_cited = audit_summary.get('brand_cited',0) %}
 
-{# ── Executive Summary ── #}
+{% set vis_class = 'severity-red' %}
+{% if sov_num > 20 %}{% set vis_class = 'severity-green' %}
+{% elif sov_num >= 5 %}{% set vis_class = 'severity-yellow' %}{% endif %}
+
+{# ── Build capabilities map for gating ── #}
+{% set cap_map = {} %}
+{% for c in capabilities %}{% set _ = cap_map.__setitem__(c.capability, c) %}{% endfor %}
+
+{# ── Report Header ── #}
+<div class="report-header">
+  <div class="report-header-left">
+    <a href="/engagements/brand/{{ brand.id }}" class="subtle" style="font-size:11px">&larr; Back to engagement</a>
+    <h1>{{ brand.name }}</h1>
+    <div class="report-header-meta">
+      {% if domain %}<a href="https://{{ domain }}" target="_blank" class="mono subtle">{{ domain }} &#8599;</a>{% endif %}
+      {% if audit_date_fmt %}<span class="mono subtle">Audited {{ audit_date_fmt }}</span>{% endif %}
+      <span class="badge badge-dim">{{ audit_history|length }} audit{{ 's' if audit_history|length != 1 else '' }}</span>
+    </div>
+  </div>
+  <div class="report-header-actions gap-2">
+    {% if domain %}<a href="https://{{ domain }}" target="_blank" class="btn btn-sm btn-primary">Visit Site &#8599;</a>{% endif %}
+    <button class="btn btn-sm" onclick="window.print();return false">PDF</button>
+  </div>
+</div>
+
+{% if not audit %}
+<div class="card"><p class="empty">No audit yet — run one from the engagement page first.</p></div>
+{% else %}
+
+{# ── Section 1: Executive Summary ── #}
+<div class="report-section">
 <div class="card">
   <div class="card-title mb-2">Executive Summary</div>
-  <div class="stats">
-    <div class="stat-card">
-      <div class="stat-value">{{ sov }}%</div>
+  <div class="exec-grid">
+    <div class="exec-vis">
+      <div class="metric-highlight {{ vis_class }}">{{ sov }}%</div>
       <div class="stat-label">AI Visibility</div>
-      <div class="stat-sub">{{ audit_summary.get('brand_cited',0) }}/{{ audit_summary.get('prompts_queried',0) }} prompts</div>
+      <div class="stat-sub">{{ brand_cited }}/{{ prompts_queried }} prompts cited this brand</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-value" style="font-size:16px">
-        {% if conf == 'low' %}<span class="badge badge-red">low confidence</span>{% else %}<span class="badge badge-green">normal</span>{% endif %}
+    <div class="exec-side">
+      <div class="metric">
+        <span class="metric-label">Confidence</span>
+        {% if conf == 'low' %}<span class="badge badge-red">low confidence</span>
+        {% else %}<span class="badge badge-green">normal</span>{% endif %}
       </div>
-      <div class="stat-label">Confidence</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" style="font-size:14px">{{ audit_summary.get('category','?') }}</div>
-      <div class="stat-label">Category</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" style="font-size:14px">
-        {% if gap == 'true' or gap is sameas true %}<span class="badge badge-red">competitor gap</span>
+      <div class="metric">
+        <span class="metric-label">Category</span>
+        <span>{{ audit_summary.get('category','?') }}</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Competitor Gap</span>
+        {% if gap == 'true' or gap is sameas true %}<span class="badge badge-red">gap detected</span>
         {% elif gap == 'false' or gap is sameas false %}<span class="badge badge-green">no gap</span>
         {% else %}<span class="badge badge-dim">n/a</span>{% endif %}
       </div>
-      <div class="stat-label">Competitor Gap</div>
+      <div class="metric">
+        <span class="metric-label">Last Audit</span>
+        <span class="mono">{{ audit_date_fmt }}</span>
+      </div>
     </div>
   </div>
 
   {% if mt %}
-  <div class="summary-grid">
-    <div class="metric"><span class="metric-label">Pricing Model</span><span>{{ mt.get('pricing_model','?') }}</span></div>
-    <div class="metric"><span class="metric-label">Target Customer</span><span>{{ mt.get('target_customer','?') }}</span></div>
-    <div class="metric"><span class="metric-label">Go-to-Market</span><span>{{ mt.get('go_to_market','?') }}</span></div>
+  <div class="chips mt-2">
+    {% if mt.get('pricing_model') %}<span class="pill"><span class="pill-label">Pricing</span>{{ mt.get('pricing_model') }}</span>{% endif %}
+    {% if mt.get('target_customer') %}<span class="pill"><span class="pill-label">Target</span>{{ mt.get('target_customer') }}</span>{% endif %}
+    {% if mt.get('go_to_market') %}<span class="pill"><span class="pill-label">GTM</span>{{ mt.get('go_to_market') }}</span>{% endif %}
   </div>
   {% endif %}
 
+  {% for p in brand_properties %}
+    {% if p.property_type == 'positioning' %}
+    <div class="mt-2 subtle">{{ p.value }}</div>
+    {% endif %}
+  {% endfor %}
+
   {% if gate == 'true' or gate is sameas true %}
-  <div class="summary-status">
-    <span class="badge badge-red">visibility gate blocked</span>
-    <span class="subtle">Audit was blocked by a visibility gate — results may be incomplete.</span>
+  <div class="alert alert-red mt-2">
+    <strong>&#9888; Visibility gate blocked.</strong>
+    <span>The audit couldn't fully measure this brand's AI visibility — likely because the brand was not cited enough to cross the detection threshold. Results may be incomplete; consider re-running after addressing the suggestions below.</span>
   </div>
   {% endif %}
   {% if audit_summary.get('note') %}
   <div class="subtle mt-2">{{ audit_summary.get('note') }}</div>
   {% endif %}
+  {% if audit_summary.get('ch_insert_failures') %}
+  <div class="subtle mt-1" style="color:var(--amber)">&#9888; {{ audit_summary.get('ch_insert_failures') }} ClickHouse insert failure(s) recorded.</div>
+  {% endif %}
+</div>
 </div>
 
-{# ── AI Visibility Detail ── #}
+{# ── Section 2: Capabilities Checklist ── #}
+<div class="report-section">
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Capabilities Checklist</span>
+    <span class="subtle">defend_audit results</span>
+  </div>
+  {% if capabilities %}
+  <div class="cap-grid">
+    {% for c in capabilities %}
+    {% set st = c.status %}
+    {% set ev = c.evidence or {} %}
+    <div class="cap-chip {{ st }}">
+      <span class="cap-icon">
+        {% if st == 'available' %}&#10003;
+        {% elif st == 'missing' %}&#10007;
+        {% elif st == 'defective' %}&#9888;
+        {% else %}?{% endif %}
+      </span>
+      <span class="cap-body">
+        <span class="cap-name">{{ c.capability }}</span>
+        <span class="cap-metric">
+          {# Sitemap #}
+          {% if c.capability == 'sitemap' %}
+            {{ ev.get('url_count','?') }} URLs{% if ev.get('most_recent_lastmod') %} &middot; updated {{ ev.get('most_recent_lastmod','')[:10] }}{% endif %}
+          {# Blog #}
+          {% elif c.capability == 'blog' %}
+            {% if ev.get('blog_200') %}Yes{% else %}No &mdash; content creation blocked{% endif %}
+          {# RSS Feed #}
+          {% elif c.capability == 'rss_feed' %}
+            {% if ev.get('feed_200') %}Yes{% else %}No{% endif %}
+          {# Robots #}
+          {% elif c.capability == 'robots_txt' %}
+            {% if ev.get('exists') %}Exists{% else %}Missing{% endif %}
+            {% if ev.get('disallow_all') %} &middot; <span class="severity-red">disallow all</span>{% endif %}
+            {% if ev.get('sitemap_declared') %} &middot; sitemap declared{% endif %}
+          {# Meta description #}
+          {% elif c.capability == 'seo_meta_description' %}
+            {% if ev.get('has_meta_description') %}Present{% else %}Missing{% endif %}
+          {# Social sharing #}
+          {% elif c.capability == 'social_sharing' %}
+            OG: {% if ev.get('has_og_tags') %}yes{% else %}no{% endif %} &middot; Twitter: {% if ev.get('has_twitter_card') %}yes{% else %}no{% endif %}
+          {# Structured data #}
+          {% elif c.capability == 'structured_data' %}
+            {% if ev.get('has_jsonld') %}JSON-LD detected{% else %}No schema found{% endif %}
+          {# Image alt #}
+          {% elif c.capability == 'image_alt_text' %}
+            {{ ev.get('img_count','?') }} images{% if ev.get('img_missing_or_long_alt') %} &middot; <span class="severity-red">{{ ev.get('img_missing_or_long_alt') }} missing alt</span>{% endif %}
+          {# WP REST #}
+          {% elif c.capability == 'wp_rest_api' %}
+            {% if ev.get('returns_json') %}Available &mdash; WP publishing possible{% else %}Not available{% endif %}
+          {# Homepage / CMS #}
+          {% elif c.capability == 'homepage' %}
+            CMS: {{ ev.get('generator') or 'Unknown' }}
+          {% else %}
+            {{ st }}
+          {% endif %}
+        </span>
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# Gated capabilities subsection #}
+  <div class="card-title mb-2 mt-3" style="font-size:11px">Gated Capabilities</div>
+  <div class="cap-grid">
+    <div class="cap-chip locked">
+      <span class="cap-icon">&#128274;</span>
+      <span class="cap-body">
+        <span class="cap-name">Google Search Console</span>
+        <span class="cap-metric">Requires DNS TXT verification &mdash; ask client to add the property</span>
+      </span>
+    </div>
+    {% set wp = cap_map.get('wp_rest_api') %}
+    <div class="cap-chip {{ 'available' if wp and wp.status == 'available' else 'locked' }}">
+      <span class="cap-icon">{% if wp and wp.status == 'available' %}&#10003;{% else %}&#128274;{% endif %}</span>
+      <span class="cap-body">
+        <span class="cap-name">WordPress Publishing</span>
+        <span class="cap-metric">{% if wp and wp.status == 'available' %}Available{% else %}Requires Application Password &mdash; ask client for WP access{% endif %}</span>
+      </span>
+    </div>
+    <div class="cap-chip {{ 'available' if agent_allowed else 'locked' }}">
+      <span class="cap-icon">{% if agent_allowed %}&#10003;{% else %}&#128274;{% endif %}</span>
+      <span class="cap-body">
+        <span class="cap-name">Code Access</span>
+        <span class="cap-metric">{% if agent_allowed %}GitHub repo linked &mdash; implement enabled{% else %}Requires GitHub repo access{% endif %}</span>
+      </span>
+    </div>
+  </div>
+
+  {% else %}
+  <p class="empty">No defend_audit run for this brand's project. Capabilities will appear here after a project audit.</p>
+  {% endif %}
+</div>
+</div>
+
+{# ── Section 3: AI Visibility Detail ── #}
+<div class="report-section">
 <div class="card">
   <div class="card-title mb-2">AI Visibility Detail</div>
   {% if visibility_rows %}
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>#</th><th>Prompt</th><th>Cited</th><th>Pos</th><th>Competitors Cited</th></tr>
+        <tr><th>#</th><th>Prompt</th><th>Cited</th><th>Pos</th><th>Competitors Cited</th><th>Timestamp</th></tr>
       </thead>
       <tbody>
         {% for r in visibility_rows %}
@@ -97,65 +217,125 @@
           <td class="mono subtle">{{ loop.index }}</td>
           <td class="detail-cell">{{ r.prompt }}</td>
           <td>
-            {% if r.cited == '1' or r.cited == 1 %}<span class="badge yes">yes</span>
-            {% else %}<span class="badge no">no</span>{% endif %}
+            {% if r.cited in ['1', 1, 'true', true] %}<span class="badge yes">&#10003; yes</span>
+            {% else %}<span class="badge no">&#10007; no</span>{% endif %}
           </td>
-          <td class="mono">{{ r.position }}</td>
+          <td class="mono">{{ r.position or '—' }}</td>
           <td class="detail-cell subtle">{{ r.competitors_cited }}</td>
+          <td class="mono subtle">{{ (r.ts or '')[:19] }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   {% else %}
-  <p class="empty">No per-prompt visibility rows in ClickHouse for this brand.</p>
+  <p class="empty">
+    {% if ch_error %}ClickHouse data not available for this audit. This may be due to a temporary storage issue. The aggregate visibility score above is still valid.
+    {% else %}No per-prompt visibility rows in ClickHouse for this brand.{% endif %}
+  </p>
+  {% endif %}
+
+  {# Citation comparison bars #}
+  {% if cite_counts %}
+  {% set max_cite = cite_counts.values()|max if cite_counts else 1 %}
+  <div class="card-title mb-2 mt-3" style="font-size:11px">Citation Comparison</div>
+  <div class="citation-bars">
+    <div class="citation-bar-row">
+      <span class="citation-label">{{ brand.name }} (this brand)</span>
+      <div class="citation-bar"><div class="citation-fill self" style="width:{{ (brand_cited / (max_cite or 1) * 100)|round }}%"></div></div>
+      <span class="citation-count severity-{{ 'green' if brand_cited > 0 else 'red' }}">{{ brand_cited }}</span>
+    </div>
+    {% for c in comps %}
+    {% set cnt = cite_counts.get(c.get('name'), 0) %}
+    {% set cnt_num = cnt|float %}
+    <div class="citation-bar-row">
+      <span class="citation-label">{{ c.get('name','?') }}</span>
+      <div class="citation-bar"><div class="citation-fill" style="width:{{ (cnt_num / (max_cite or 1) * 100)|round }}%"></div></div>
+      <span class="citation-count">{{ cnt }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if prompts_used %}
+  <details class="mt-2">
+    <summary class="subtle" style="cursor:pointer">Prompts used ({{ prompts_used|length }})</summary>
+    <ul class="mt-1" style="font-size:11px;color:var(--text-muted);padding-left:18px">
+      {% for p in prompts_used %}<li>{{ p }}</li>{% endfor %}
+    </ul>
+  </details>
   {% endif %}
 </div>
+</div>
 
-{# ── Competitor Analysis ── #}
+{# ── Section 4: Competitor Analysis ── #}
+<div class="report-section">
 <div class="card">
   <div class="card-title mb-2">Competitor Analysis</div>
-  {% set comps = audit_summary.get('competitors') or [] %}
-  {% set cite_counts = audit_summary.get('competitor_citation_counts') or {} %}
-  {% set max_cite = cite_counts.values()|max if cite_counts else 0 %}
-  {% if comps %}
-  {% for c in comps %}
-  {% set cnt = cite_counts.get(c.get('name'), 0) %}
-  {% set pct = (cnt / max_cite * 100)|round if max_cite else 0 %}
-  <div class="suggestion-card">
-    <div class="gap-2 flex-center">
-      <strong style="color:var(--text-bright)">{{ c.get('name','?') }}</strong>
-      {% if c.get('domain') %}<a href="https://{{ c.domain }}" target="_blank" class="mono subtle">{{ c.domain }}</a>{% endif %}
-      <span class="badge badge-dim">{{ cnt }} citations</span>
+  {% set brand_sitemap = cap_map.get('sitemap') %}
+  {% set brand_url_count = (brand_sitemap.evidence or {}).get('url_count', 0) if brand_sitemap else 0 %}
+  {% if competitors %}
+  <div class="competitor-grid">
+    {% for c in competitors %}
+    {% set comp_url = c.get('sitemap_url') %}
+    {% set why = '' %}
+    {% for ac in comps %}
+      {% if ac.get('domain') == c.domain or ac.get('name') == c.name %}{% set why = ac.get('why','') %}{% endif %}
+    {% endfor %}
+    <div class="competitor-card">
+      <div class="gap-2 flex-center">
+        <strong style="color:var(--text-bright)">{{ c.name or c.domain }}</strong>
+        <a href="https://{{ c.domain }}" target="_blank" class="mono subtle">{{ c.domain }} &#8599;</a>
+      </div>
+      {% if why %}<div class="subtle mt-1">{{ why }}</div>{% endif %}
+      <div class="competitor-metrics mt-2">
+        <span class="pill"><span class="pill-label">Pages</span>{{ c.page_count or 0 }}</span>
+        {% if c.most_recent_page_fmt %}
+          <span class="pill"><span class="pill-label">Latest</span>{{ c.most_recent_page_fmt }}</span>
+        {% endif %}
+        <span class="pill"><span class="pill-label">Scan</span>{% if c.scan_enabled %}on{% else %}off{% endif %}</span>
+      </div>
+      {% if brand_url_count and c.page_count and c.page_count|int > brand_url_count|int %}
+      <div class="mt-1 subtle" style="color:var(--amber)">&#8593; Competitor has {{ c.page_count|int - brand_url_count|int }} more pages than this brand ({{ c.page_count }} vs {{ brand_url_count }})</div>
+      {% elif brand_url_count and c.page_count and c.page_count|int < brand_url_count|int %}
+      <div class="mt-1 subtle" style="color:var(--green)">&#8595; Brand has {{ brand_url_count|int - c.page_count|int }} more pages ({{ brand_url_count }} vs {{ c.page_count }})</div>
+      {% endif %}
+      <div class="mt-2">
+        <a href="/competitors" class="btn btn-xs">Details &rarr;</a>
+      </div>
     </div>
-    {% if c.get('why') %}<div class="subtle mt-1">{{ c.why }}</div>{% endif %}
-    {% if max_cite %}
-    <div class="bar mt-2" style="width:100%">
-      <div class="fill" style="width:{{ pct }}%;background:var(--accent)"></div>
-    </div>
-    {% endif %}
+    {% endfor %}
   </div>
-  {% endfor %}
-  {% elif competitors %}
-  {% for c in competitors %}
-  <div class="suggestion-card">
-    <div class="gap-2 flex-center">
-      <strong style="color:var(--text-bright)">{{ c.name or c.domain }}</strong>
-      <a href="https://{{ c.domain }}" target="_blank" class="mono subtle">{{ c.domain }}</a>
+  {% elif comps %}
+  <div class="competitor-grid">
+    {% for c in comps %}
+    <div class="competitor-card">
+      <div class="gap-2 flex-center">
+        <strong style="color:var(--text-bright)">{{ c.get('name','?') }}</strong>
+        {% if c.get('domain') %}<a href="https://{{ c.domain }}" target="_blank" class="mono subtle">{{ c.domain }} &#8599;</a>{% endif %}
+      </div>
+      {% if c.get('why') %}<div class="subtle mt-1">{{ c.why }}</div>{% endif %}
     </div>
+    {% endfor %}
   </div>
-  {% endfor %}
   {% else %}
   <p class="empty">No competitors recorded.</p>
   {% endif %}
 </div>
+</div>
 
-{# ── Suggested Actions ── #}
+{# ── Section 5: Suggested Actions ── #}
+<div class="report-section">
 <div class="card">
   <div class="card-title mb-2">Suggested Actions</div>
   {% if suggestions %}
   {% for s in suggestions %}
-  <div class="suggestion-card" id="rpt-sug-{{ s.id }}">
+  {% set at = (s.action_type or '')|lower %}
+  {% set is_content = 'create' in at or 'content' in at or 'publish' in at %}
+  {% set is_code = at in ['implement','fix','code','technical'] %}
+  {% set linked_ci = content_by_suggestion.get(s.id) %}
+  {% set linked_task = task_by_suggestion.get(s.id) %}
+  <div class="suggestion-card impact-{{ s.impact or 'low' }}" id="rpt-sug-{{ s.id }}">
     <div class="gap-2 flex-center">
       <span style="font-weight:600;flex:1;font-size:13px;color:var(--text-bright)">{{ s.title }}</span>
       {% if s.impact %}<span class="badge {{ s.impact }}">{{ s.impact }}</span>{% endif %}
@@ -170,11 +350,75 @@
       {% for f in flags %}<span class="badge badge-amber">&#9888; {{ f }}</span>{% endfor %}
     </div>
     {% endif %}
-    {% if s.status == 'pending' %}
+
+    {# Linked content #}
+    {% if linked_ci %}
+    <div class="mt-2">
+      <a href="/content/{{ linked_ci.id }}/preview" class="btn btn-xs btn-green">Content Draft Ready &rarr;</a>
+    </div>
+    {% endif %}
+    {# Linked task #}
+    {% if linked_task %}
+    <div class="mt-1">
+      <a href="/tasks/{{ linked_task.id }}" class="btn btn-xs">Task #{{ linked_task.id }} &rarr;</a>
+      <span class="badge {{ linked_task.status }} ml-1">{{ linked_task.status }}</span>
+    </div>
+    {% endif %}
+
+    {# Action buttons / capability gates #}
     <div class="mt-2 gap-2">
+      {% if is_content and not linked_ci %}
+      <a href="/content/new?brand_id={{ brand.id }}&suggestion_id={{ s.id }}" class="btn btn-sm btn-primary">Generate Content</a>
+      {% endif %}
+      {% if is_code and agent_allowed and not linked_task %}
+      <form method="post" action="/api/dev-tasks/create" style="display:inline" onsubmit="return rptImpl(this,{{ s.id }})">
+        <input type="hidden" name="repo" value="{{ (repo_url or '').split('/')[-1] or '' }}">
+        <input type="hidden" name="description" value="{{ s.title }} — {{ s.rationale }}">
+        <button class="btn btn-sm btn-green" type="submit">Implement Now</button>
+      </form>
+      {% endif %}
+      {% if is_code and not agent_allowed %}
+      <span class="badge badge-dim" title="Requires GitHub repo access">&#128274; Requires Code Access</span>
+      {% endif %}
+      {% if 'gsc' in at or 'search console' in at or 'search_console' in at %}
+      <span class="badge badge-dim">&#128274; Requires GSC Access</span>
+      {% endif %}
+      {% if 'wordpress' in at or 'wp_' in at or 'publish' in (s.rationale or '')|lower %}
+      {% set wp = cap_map.get('wp_rest_api') %}
+      {% if not wp or wp.status != 'available' %}
+      <span class="badge badge-dim">&#128274; Requires WP Access</span>
+      {% endif %}
+      {% endif %}
+
+      {# Approve/Reject only when agent_allowed #}
+      {% if s.status == 'pending' and agent_allowed %}
       <button class="btn btn-sm btn-green" onclick="rptApprove({{ s.id }})">Approve</button>
       <button class="btn btn-sm btn-red" onclick="rptReject({{ s.id }})">Reject</button>
+      {% endif %}
     </div>
+
+    {# Plain-language implementation instructions #}
+    {% if is_code or 'structured_data' in at or 'schema' in (s.title or '')|lower or 'json-ld' in (s.rationale or '')|lower %}
+    <details class="mt-2">
+      <summary class="subtle" style="cursor:pointer">How to implement</summary>
+      <div class="how-to mt-1">
+        {% if 'structured_data' in at or 'schema' in (s.title or '')|lower or 'json-ld' in (s.rationale or '')|lower %}
+        1. Add the recommended JSON-LD to your homepage &lt;head&gt; section.<br>
+        2. Validate with Google's <a href="https://search.google.com/test/rich-results" target="_blank">Rich Results Test</a>.<br>
+        3. Submit the page to Search Console for re-crawling.<br>
+        4. Re-run this audit to verify detection.
+        {% elif is_code %}
+        1. Review the change description above.<br>
+        2. Click "Implement Now" to have the agent create a PR.<br>
+        3. Review the PR on GitHub.<br>
+        4. Merge after testing, then re-run the audit.
+        {% else %}
+        1. Review the suggestion rationale above.<br>
+        2. Implement the change on your site.<br>
+        3. Re-run this audit to verify the fix.
+        {% endif %}
+      </div>
+    </details>
     {% endif %}
   </div>
   {% endfor %}
@@ -182,34 +426,116 @@
   <p class="empty">No suggestions from this audit.</p>
   {% endif %}
 </div>
+</div>
 
-{# ── Methodology & Sources ── #}
-<details class="card">
+{# ── Section 6: Content & Drafts ── #}
+<div class="report-section">
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Content &amp; Drafts</span>
+    <a href="/content/new?brand_id={{ brand.id }}" class="btn btn-sm">New Content</a>
+  </div>
+  {% if content_items %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Title</th><th>Status</th><th>Type</th><th>Updated</th></tr></thead>
+      <tbody>
+        {% for ci in content_items %}
+        <tr>
+          <td><a href="/content/{{ ci.id }}/preview" style="color:var(--text-bright);font-weight:500">{{ ci.title }}</a></td>
+          <td><span class="badge {{ ci.status }}">{{ ci.status }}</span></td>
+          <td class="mono subtle">{{ ci.content_type or '—' }}</td>
+          <td class="mono subtle">{{ ci.updated_fmt }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No content created yet. Generate content from suggestions above.</p>
+  {% endif %}
+</div>
+</div>
+
+{# ── Section 7: Audit History ── #}
+<div class="report-section">
+<div class="card">
+  <div class="card-title mb-2">Audit History</div>
+  {% if audit_history %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Type</th><th>Visibility</th><th>Confidence</th><th></th></tr></thead>
+      <tbody>
+        {% for a in audit_history %}
+        <tr>
+          <td class="mono subtle">{{ a.created_fmt }}</td>
+          <td class="mono">{{ a.audit_type }}</td>
+          <td>
+            {% set v = a.vis_pct %}
+            {% if v is not none and v != '' %}
+              {% set vn = v|float if v is string or v is number else 0 %}
+              <span class="severity-{% if vn > 20 %}green{% elif vn >= 5 %}yellow{% else %}red{% endif %}">{{ v }}%</span>
+            {% else %}<span class="subtle">—</span>{% endif %}
+          </td>
+          <td>{% if a.confidence == 'low' %}<span class="badge badge-red">low</span>{% else %}<span class="badge badge-green">normal</span>{% endif %}</td>
+          <td><a href="/engagements/brand/{{ brand.id }}/report?audit_id={{ a.id }}" class="btn btn-xs">View</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No audit history.</p>
+  {% endif %}
+</div>
+</div>
+
+{# ── Section 8: Recent Activity ── #}
+<div class="report-section">
+<div class="card">
+  <div class="card-title mb-2">Recent Activity</div>
+  {% if recent_tasks %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Type</th><th>Status</th><th>Created</th><th>Error</th></tr></thead>
+      <tbody>
+        {% for t in recent_tasks %}
+        <tr>
+          <td class="mono"><a href="/tasks/{{ t.id }}">{{ t.id }}</a></td>
+          <td class="mono">{{ t.type }}</td>
+          <td><span class="badge {{ t.status }}">{{ t.status }}</span></td>
+          <td class="mono subtle">{{ t.created_fmt }}</td>
+          <td class="detail-cell subtle" style="color:var(--red)">{{ t.error or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No recent tasks for this brand.</p>
+  {% endif %}
+</div>
+</div>
+
+{# ── Section 9: Methodology & Sources (collapsible) ── #}
+<details class="card report-section">
   <summary class="card-title" style="cursor:pointer">Methodology &amp; Sources</summary>
   <div class="mt-2">
-    {% if audit_summary.get('methodology') %}
-    <div class="subtle mb-2">{{ audit_summary.get('methodology') }}</div>
-    {% endif %}
-    {% if audit_summary.get('note') %}
-    <div class="subtle mb-2">{{ audit_summary.get('note') }}</div>
-    {% endif %}
-    {% if audit_summary.get('engine') %}
-    <div class="subtle mb-2">Engine: <span class="mono">{{ audit_summary.get('engine') }}</span></div>
-    {% endif %}
+    {% if audit_summary.get('methodology') %}<div class="subtle mb-2">{{ audit_summary.get('methodology') }}</div>{% endif %}
+    {% if audit_summary.get('note') %}<div class="subtle mb-2">{{ audit_summary.get('note') }}</div>{% endif %}
+    {% if audit_summary.get('engine') %}<div class="subtle mb-2">Engine: <span class="mono">{{ audit_summary.get('engine') }}</span></div>{% endif %}
     {% if audit_sources %}
     <div class="card-title mb-2" style="font-size:11px">Sources</div>
     <ul style="font-size:11px;color:var(--text-muted);padding-left:18px">
-      {% for src in audit_sources %}
-      <li>{{ src|tojson|safe }}</li>
-      {% endfor %}
+      {% for src in audit_sources %}<li>{{ src|tojson|safe }}</li>{% endfor %}
     </ul>
     {% endif %}
   </div>
 </details>
 
-{# ── Raw Data ── #}
+{# ── Raw Data (debug) ── #}
 <details class="card">
-  <summary class="card-title" style="cursor:pointer">Raw Data (debug)</summary>
+  <summary class="card-title" style="cursor:pointer">Raw Summary JSON (debug)</summary>
   <pre class="code mt-2" style="max-height:400px;overflow:auto">{{ summary_json }}</pre>
 </details>
 
@@ -223,6 +549,14 @@ async function rptApprove(sid) {
 async function rptReject(sid) {
   await fetch('/api/suggestions/'+sid+'/reject', {method:'POST'});
   var el = document.getElementById('rpt-sug-'+sid); if(el) el.style.opacity='0.5';
+}
+function rptImpl(form, sid) {
+  fetch(form.action, {method:'POST', body:new FormData(form)})
+    .then(r => r.json()).then(d => {
+      if (d.ok) { window.location.href = '/tasks/'+d.task_id; }
+      else { alert('Failed: '+(d.error||'unknown')); }
+    }).catch(e => alert('Error: '+e.message));
+  return false;
 }
 </script>
 {% endblock %}
