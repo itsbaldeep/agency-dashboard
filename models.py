@@ -225,11 +225,13 @@ def get_engagements():
                 created_at=c["created_at"], intake_params=c["intake_params"],
             ))
 
-        # Orphan projects (no client, no linked brand)
+        # Orphan projects (no client, no linked brand) — exclude infra/archived
         cur.execute("""
             SELECT p.* FROM projects p
             WHERE p.id NOT IN (SELECT project_id FROM clients WHERE project_id IS NOT NULL)
               AND p.id NOT IN (SELECT project_id FROM brands WHERE project_id IS NOT NULL)
+              AND p.state <> 'archived'
+              AND lower(p.name) NOT IN ('agency-os','agency-dashboard','aetheria','hearth','streamwise')
             ORDER BY p.created_at DESC
         """)
         for p in cur.fetchall():
