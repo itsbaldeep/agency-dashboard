@@ -16,7 +16,22 @@
     </div>
     <div class="mt-1 subtle">{{ a.requested_at.strftime('%b %d %H:%M') if a.requested_at else '' }}</div>
     {% if a.payload %}
-    <div class="mt-1 subtle mono">{{ a.payload|tojson }}</div>
+    {% if a.payload.get('gallery') %}
+    <div class="mt-1">
+      <a class="btn btn-sm" href="{{ a.payload.gallery }}" target="_blank" rel="noopener">&#128247; Gallery — {{ a.payload.get('sha','') }}</a>
+    </div>
+    {% endif %}
+    {% if a.payload.get('build') %}
+    <div class="mt-1">
+      <a class="btn btn-sm" href="{{ a.payload.build }}" target="_blank" rel="noopener">&#11015; Build</a>
+    </div>
+    {% endif %}
+    {% if a.payload.get('changed') %}
+    <div class="mt-1 subtle">Changed: {{ a.payload.changed }}</div>
+    {% endif %}
+    {% if a.payload.get('ask') %}
+    <div class="mt-1 subtle">{{ a.payload.ask[:200] }}</div>
+    {% endif %}
     {% endif %}
     <div class="mt-2 gap-2">
       <button class="btn btn-sm btn-green" onclick="actApproval({{ a.id }},'approve')">Approve</button>

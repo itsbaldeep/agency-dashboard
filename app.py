@@ -1667,6 +1667,59 @@ def job_all_applications():
     return render_template("job_applications.html", applications=apps)
 
 
+# ── Aetheria game-project dashboard ──────────────────────────────
+
+@app.route("/aetheria")
+def aetheria():
+    return render_template("aetheria.html")
+
+
+@app.route("/aetheria/data")
+def aetheria_data():
+    status = models.get_game_status()
+    work_blocks = models.get_game_work_blocks()
+    pending_approvals = models.get_game_pending_approvals()
+    # Format for template
+    for t in work_blocks:
+        t["created_fmt"] = fmt_ts(t.get("created_at"))
+        t["duration"] = fmt_dur(t.get("started_at"), t.get("finished_at"))
+        t["tokens"] = (t.get("prompt_tokens") or 0) + (t.get("completion_tokens") or 0)
+        t["cost_f"] = f"{float(t.get('cost') or 0):.4f}" if t.get("cost") else "0"
+        t["model"] = (t.get("params") or {}).get("model", "")
+        # Parse result_ref for commit range + next
+        if t.get("result_ref"):
+            try:
+                t["result"] = json.loads(t["result_ref"])
+            except (json.JSONDecodeError, TypeError):
+                t["result"] = {}
+        else:
+            t["result"] = {}
+    return render_template("fragments/aetheria_status.html",
+                           status=status, work_blocks=work_blocks,
+                           pending_approvals=pending_approvals)
+
+
+@app.route("/aetheria/work-block/<int:tid>/monitor")
+def aetheria_block_monitor(tid):
+    """Live progress fragment for a work block (self-polling while running)."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, status, progress, progress_text, cost, "
+                    "prompt_tokens, completion_tokens, finished_at, error, result_ref "
+                    "FROM tasks WHERE id=%s", (tid,))
+        t = cur.fetchone()
+        if t:
+            t = {k: dec_to_num(v) for k, v in dict(t).items()}
+            t["tokens"] = (t.get("prompt_tokens") or 0) + (t.get("completion_tokens") or 0)
+            t["cost_f"] = f"{float(t.get('cost') or 0):.4f}" if t.get("cost") else "0"
+    finally:
+        conn.close()
+    if not t:
+        return "", 404
+    return render_template("_task_monitor.html", t=t)
+
+
 # ── Static files ───────────────────────────────────────────────
 
 @app.route("/static/<path:filename>")

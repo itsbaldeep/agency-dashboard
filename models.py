@@ -784,6 +784,8 @@ def get_system_data():
             "generate_linkedin_note": "Generate LinkedIn connection note",
             "send_application_email": "Send application email via Gmail API",
             "run_job_campaign": "Full job campaign orchestration (search -> tailor -> draft -> contact -> email)",
+            "aetheria_work_block": "Aetheria autonomous dev loop: one headless opencode session that does ONE checklist item, tests, screenshots, commits, pushes",
+            "competitor_scan": "Sitemap scan for competitor pages (deterministic, zero LLM)",
         },
         "adminer_port": os.environ.get("ADMINER_PORT", ""),
     }
@@ -953,5 +955,130 @@ def get_job_stats():
         cur.execute("SELECT COUNT(*) AS c FROM email_threads WHERE status='sent'")
         emails_sent = cur.fetchone()["c"]
         return {"campaigns": campaigns, "listings": listings, "applications": applications, "active": active, "emails_sent": emails_sent}
+    finally:
+        conn.close()
+
+
+# ── Aetheria game-project status ─────────────────────────────────
+
+AETHERIA_REPO_PATH = "/home/agency/projects/aetheria"
+
+
+def get_game_status(repo_path=AETHERIA_REPO_PATH):
+    """Parse STATE.md for the current milestone, checklist progress, next action,
+    and blockers. Returns {} if the repo/STATE.md isn't found (non-game projects
+    simply don't render the card). Also reads CHANGELOG for the last few lines."""
+    import os as _os
+    state_path = _os.path.join(repo_path, "docs", "STATE.md")
+    if not _os.path.isfile(state_path):
+        return {}
+    try:
+        with open(state_path) as f:
+            state = f.read()
+    except Exception:
+        return {}
+
+    # Current milestone (from the "## Current milestone" section header)
+    milestone = ""
+    m = re.search(r"## Current milestone\s*\n\*\*(.+?)\*\*", state)
+    if m:
+        milestone = m.group(1).strip()
+
+    # Next action
+    next_action = ""
+    m = re.search(r"## Next action\n(.+)", state, re.DOTALL)
+    if m:
+        next_action = m.group(1).split("\n\n")[0].strip()
+
+    # Blockers
+    blockers = ""
+    m = re.search(r"## Blockers\n(.+?)(?=\n## |\Z)", state, re.DOTALL)
+    if m:
+        blockers = m.group(1).strip()
+
+    # Checklist progress: count [x] vs [ ] across the whole file
+    done = len(re.findall(r"- \[x\]", state))
+    total = done + len(re.findall(r"- \[ \]", state))
+
+    # Last changelog entries
+    changelog_lines = []
+    cl_path = _os.path.join(repo_path, "docs", "CHANGELOG.md")
+    if _os.path.isfile(cl_path):
+        try:
+            with open(cl_path) as f:
+                cl_lines = [l.strip() for l in f if l.strip().startswith("- 2026")]
+            changelog_lines = cl_lines[:5]
+        except Exception:
+            pass
+
+    # Gallery URL + download URL (known from the project's subdomains)
+    gallery_url = "https://admin.aetheria.apps.deployden.tech/screens"
+    download_url = "https://aetheria.apps.deployden.tech/download"
+
+    # Raw GitHub links for STATE.md + CHANGELOG
+    repo_name = _os.path.basename(repo_path)
+    state_url = f"https://github.com/itsbaldeep/{repo_name}/blob/main/docs/STATE.md"
+    changelog_url = f"https://github.com/itsbaldeep/{repo_name}/blob/main/docs/CHANGELOG.md"
+
+    return {
+        "milestone": milestone,
+        "next_action": next_action,
+        "blockers": blockers,
+        "checklist_done": done,
+        "checklist_total": total,
+        "changelog_lines": changelog_lines,
+        "gallery_url": gallery_url,
+        "download_url": download_url,
+        "state_url": state_url,
+        "changelog_url": changelog_url,
+        "repo_path": repo_path,
+    }
+
+
+def get_game_work_blocks(limit=15):
+    """Recent aetheria_work_block tasks with progress + cost for the dashboard."""
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, status, progress, progress_text, cost,
+                   prompt_tokens, completion_tokens, error, result_ref,
+                   created_at, started_at, finished_at, triggered_by, params
+            FROM tasks WHERE type = 'aetheria_work_block'
+            ORDER BY id DESC LIMIT %s
+        """, (limit,))
+        tasks = cur.fetchall()
+        for t in tasks:
+            if isinstance(t.get("params"), str):
+                try:
+                    t["params"] = json.loads(t["params"])
+                except (json.JSONDecodeError, TypeError):
+                    t["params"] = {}
+        return tasks
+    finally:
+        conn.close()
+
+
+def get_game_pending_approvals():
+    """Pending approvals for the aetheria project (screens, gates, human_todo)."""
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT a.*, COALESCE(p.name, 'system') AS project_name
+            FROM approvals a
+            LEFT JOIN projects p ON p.id = a.project_id
+            WHERE a.status = 'pending'
+              AND (a.type::text LIKE 'aetheria_%' OR a.payload::text ILIKE '%aetheria%')
+            ORDER BY a.requested_at DESC
+        """)
+        approvals = cur.fetchall()
+        for a in approvals:
+            if isinstance(a.get("payload"), str):
+                try:
+                    a["payload"] = json.loads(a["payload"])
+                except (json.JSONDecodeError, TypeError):
+                    a["payload"] = {}
+        return approvals
     finally:
         conn.close()
