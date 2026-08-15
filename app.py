@@ -137,6 +137,80 @@ def engagement_activity(ref_type, ref_id):
     return render_template("fragments/engagement_activity.html", **data)
 
 
+@app.route("/engagements/brand/<int:brand_id>/report")
+def brand_report(brand_id):
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, slug, access_tier FROM brands WHERE id=%s", (brand_id,))
+        brand = cur.fetchone()
+        if not brand:
+            return redirect("/engagements")
+        cur.execute("SELECT property_type, value FROM brand_properties WHERE brand_id=%s", (brand_id,))
+        brand_properties = cur.fetchall()
+        cur.execute("SELECT domain, name FROM competitors WHERE brand_id=%s ORDER BY domain", (brand_id,))
+        competitors = cur.fetchall()
+        cur.execute("SELECT * FROM audits WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        audit = cur.fetchone()
+    finally:
+        conn.close()
+
+    audit_summary = {}
+    audit_sources = []
+    suggestions = []
+    if audit:
+        s = audit.get("summary")
+        if isinstance(s, str):
+            try:
+                audit_summary = json.loads(s)
+            except (json.JSONDecodeError, TypeError):
+                audit_summary = {}
+        else:
+            audit_summary = s or {}
+        src = audit.get("sources")
+        if isinstance(src, str):
+            try:
+                audit_sources = json.loads(src)
+            except (json.JSONDecodeError, TypeError):
+                audit_sources = []
+        else:
+            audit_sources = src or []
+        conn = models.db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM suggestions WHERE audit_id=%s ORDER BY impact, created_at", (audit["id"],))
+            suggestions = cur.fetchall()
+            for sg in suggestions:
+                cf = sg.get("compliance_flags")
+                if isinstance(cf, str):
+                    try:
+                        sg["compliance_flags"] = json.loads(cf)
+                    except (json.JSONDecodeError, TypeError):
+                        sg["compliance_flags"] = []
+                elif cf is None:
+                    sg["compliance_flags"] = []
+        finally:
+            conn.close()
+
+    visibility_rows = []
+    if audit:
+        cols, rows = models.ch_query(
+            "SELECT prompt, cited, position, competitors_cited, detail "
+            "FROM default.ai_visibility_checks "
+            f"WHERE brand_id = {int(brand_id)} "
+            "ORDER BY ts "
+            "FORMAT TabSeparatedWithNames"
+        )
+        visibility_rows = [dict(zip(cols, row)) for row in rows] if cols else []
+
+    return render_template("brand_report.html", active='engagements',
+                           brand=brand, brand_properties=brand_properties,
+                           competitors=competitors, audit=audit,
+                           audit_summary=audit_summary, audit_sources=audit_sources,
+                           suggestions=suggestions, visibility_rows=visibility_rows,
+                           summary_json=json.dumps(audit_summary, indent=2, default=str) if audit_summary else "")
+
+
 # ── Client onboard (create engagement) ──────────────────────────
 
 @app.route("/onboard", methods=["POST"])

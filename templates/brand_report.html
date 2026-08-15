@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="/engagements/brand/{{ brand.id }}" style="font-size:12px;color:var(--text-muted)">&larr; Back to engagement</a>
+
+{% set ns = namespace(domain=audit_summary.get('domain') or '') %}
+{% if not ns.domain %}
+  {% for p in brand_properties %}{% if p.property_type == 'domain' and not ns.domain %}{% set ns.domain = p.value %}{% endif %}{% endfor %}
+{% endif %}
+{% set domain = ns.domain %}
+
+<div class="page-header">
+  <div class="card-header">
+    <div>
+      <h1>{{ brand.name }}</h1>
+      <div class="sub">
+        {% if domain %}<span class="mono">{{ domain }}</span> &middot; {% endif %}
+        {% if audit and audit.created_at %}<span class="mono">{{ audit.created_at.strftime('%b %d, %Y %H:%M') }}</span>{% else %}<span>No audit</span>{% endif %}
+      </div>
+    </div>
+    <span class="gap-2">
+      {% if domain %}<a href="https://{{ domain }}" target="_blank" class="btn btn-sm">Visit Site &#8599;</a>{% endif %}
+      <a href="#" class="btn btn-sm" onclick="window.print();return false">Download</a>
+    </span>
+  </div>
+</div>
+
+{% if not audit %}
+<div class="card"><p class="empty">No audit yet — run one first.</p></div>
+{% else %}
+
+{% set conf = audit_summary.get('confidence','normal') %}
+{% set gap = audit_summary.get('competitor_gap') %}
+{% set gate = audit_summary.get('visibility_gate_blocked') %}
+{% set mt = audit_summary.get('market_tier') or {} %}
+{% set sov = audit_summary.get('brand_share_of_voice_pct',0) %}
+
+{# ── Executive Summary ── #}
+<div class="card">
+  <div class="card-title mb-2">Executive Summary</div>
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-value">{{ sov }}%</div>
+      <div class="stat-label">AI Visibility</div>
+      <div class="stat-sub">{{ audit_summary.get('brand_cited',0) }}/{{ audit_summary.get('prompts_queried',0) }} prompts</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="font-size:16px">
+        {% if conf == 'low' %}<span class="badge badge-red">low confidence</span>{% else %}<span class="badge badge-green">normal</span>{% endif %}
+      </div>
+      <div class="stat-label">Confidence</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="font-size:14px">{{ audit_summary.get('category','?') }}</div>
+      <div class="stat-label">Category</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="font-size:14px">
+        {% if gap == 'true' or gap is sameas true %}<span class="badge badge-red">competitor gap</span>
+        {% elif gap == 'false' or gap is sameas false %}<span class="badge badge-green">no gap</span>
+        {% else %}<span class="badge badge-dim">n/a</span>{% endif %}
+      </div>
+      <div class="stat-label">Competitor Gap</div>
+    </div>
+  </div>
+
+  {% if mt %}
+  <div class="summary-grid">
+    <div class="metric"><span class="metric-label">Pricing Model</span><span>{{ mt.get('pricing_model','?') }}</span></div>
+    <div class="metric"><span class="metric-label">Target Customer</span><span>{{ mt.get('target_customer','?') }}</span></div>
+    <div class="metric"><span class="metric-label">Go-to-Market</span><span>{{ mt.get('go_to_market','?') }}</span></div>
+  </div>
+  {% endif %}
+
+  {% if gate == 'true' or gate is sameas true %}
+  <div class="summary-status">
+    <span class="badge badge-red">visibility gate blocked</span>
+    <span class="subtle">Audit was blocked by a visibility gate — results may be incomplete.</span>
+  </div>
+  {% endif %}
+  {% if audit_summary.get('note') %}
+  <div class="subtle mt-2">{{ audit_summary.get('note') }}</div>
+  {% endif %}
+</div>
+
+{# ── AI Visibility Detail ── #}
+<div class="card">
+  <div class="card-title mb-2">AI Visibility Detail</div>
+  {% if visibility_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>#</th><th>Prompt</th><th>Cited</th><th>Pos</th><th>Competitors Cited</th></tr>
+      </thead>
+      <tbody>
+        {% for r in visibility_rows %}
+        <tr>
+          <td class="mono subtle">{{ loop.index }}</td>
+          <td class="detail-cell">{{ r.prompt }}</td>
+          <td>
+            {% if r.cited == '1' or r.cited == 1 %}<span class="badge yes">yes</span>
+            {% else %}<span class="badge no">no</span>{% endif %}
+          </td>
+          <td class="mono">{{ r.position }}</td>
+          <td class="detail-cell subtle">{{ r.competitors_cited }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No per-prompt visibility rows in ClickHouse for this brand.</p>
+  {% endif %}
+</div>
+
+{# ── Competitor Analysis ── #}
+<div class="card">
+  <div class="card-title mb-2">Competitor Analysis</div>
+  {% set comps = audit_summary.get('competitors') or [] %}
+  {% set cite_counts = audit_summary.get('competitor_citation_counts') or {} %}
+  {% set max_cite = cite_counts.values()|max if cite_counts else 0 %}
+  {% if comps %}
+  {% for c in comps %}
+  {% set cnt = cite_counts.get(c.get('name'), 0) %}
+  {% set pct = (cnt / max_cite * 100)|round if max_cite else 0 %}
+  <div class="suggestion-card">
+    <div class="gap-2 flex-center">
+      <strong style="color:var(--text-bright)">{{ c.get('name','?') }}</strong>
+      {% if c.get('domain') %}<a href="https://{{ c.domain }}" target="_blank" class="mono subtle">{{ c.domain }}</a>{% endif %}
+      <span class="badge badge-dim">{{ cnt }} citations</span>
+    </div>
+    {% if c.get('why') %}<div class="subtle mt-1">{{ c.why }}</div>{% endif %}
+    {% if max_cite %}
+    <div class="bar mt-2" style="width:100%">
+      <div class="fill" style="width:{{ pct }}%;background:var(--accent)"></div>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% elif competitors %}
+  {% for c in competitors %}
+  <div class="suggestion-card">
+    <div class="gap-2 flex-center">
+      <strong style="color:var(--text-bright)">{{ c.name or c.domain }}</strong>
+      <a href="https://{{ c.domain }}" target="_blank" class="mono subtle">{{ c.domain }}</a>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="empty">No competitors recorded.</p>
+  {% endif %}
+</div>
+
+{# ── Suggested Actions ── #}
+<div class="card">
+  <div class="card-title mb-2">Suggested Actions</div>
+  {% if suggestions %}
+  {% for s in suggestions %}
+  <div class="suggestion-card" id="rpt-sug-{{ s.id }}">
+    <div class="gap-2 flex-center">
+      <span style="font-weight:600;flex:1;font-size:13px;color:var(--text-bright)">{{ s.title }}</span>
+      {% if s.impact %}<span class="badge {{ s.impact }}">{{ s.impact }}</span>{% endif %}
+      {% if s.effort %}<span class="badge {{ s.effort }}">{{ s.effort }}</span>{% endif %}
+      {% if s.action_type %}<span class="badge badge-dim">{{ s.action_type }}</span>{% endif %}
+      <span class="badge {{ s.status }}">{{ s.status }}</span>
+    </div>
+    {% if s.rationale %}<div class="subtle mt-1">{{ s.rationale }}</div>{% endif %}
+    {% set flags = s.compliance_flags or [] %}
+    {% if flags %}
+    <div class="mt-1 gap-2">
+      {% for f in flags %}<span class="badge badge-amber">&#9888; {{ f }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% if s.status == 'pending' %}
+    <div class="mt-2 gap-2">
+      <button class="btn btn-sm btn-green" onclick="rptApprove({{ s.id }})">Approve</button>
+      <button class="btn btn-sm btn-red" onclick="rptReject({{ s.id }})">Reject</button>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="empty">No suggestions from this audit.</p>
+  {% endif %}
+</div>
+
+{# ── Methodology & Sources ── #}
+<details class="card">
+  <summary class="card-title" style="cursor:pointer">Methodology &amp; Sources</summary>
+  <div class="mt-2">
+    {% if audit_summary.get('methodology') %}
+    <div class="subtle mb-2">{{ audit_summary.get('methodology') }}</div>
+    {% endif %}
+    {% if audit_summary.get('note') %}
+    <div class="subtle mb-2">{{ audit_summary.get('note') }}</div>
+    {% endif %}
+    {% if audit_summary.get('engine') %}
+    <div class="subtle mb-2">Engine: <span class="mono">{{ audit_summary.get('engine') }}</span></div>
+    {% endif %}
+    {% if audit_sources %}
+    <div class="card-title mb-2" style="font-size:11px">Sources</div>
+    <ul style="font-size:11px;color:var(--text-muted);padding-left:18px">
+      {% for src in audit_sources %}
+      <li>{{ src|tojson|safe }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+</details>
+
+{# ── Raw Data ── #}
+<details class="card">
+  <summary class="card-title" style="cursor:pointer">Raw Data (debug)</summary>
+  <pre class="code mt-2" style="max-height:400px;overflow:auto">{{ summary_json }}</pre>
+</details>
+
+{% endif %}
+
+<script>
+async function rptApprove(sid) {
+  await fetch('/api/suggestions/'+sid+'/approve', {method:'POST'});
+  var el = document.getElementById('rpt-sug-'+sid); if(el) el.style.opacity='0.5';
+}
+async function rptReject(sid) {
+  await fetch('/api/suggestions/'+sid+'/reject', {method:'POST'});
+  var el = document.getElementById('rpt-sug-'+sid); if(el) el.style.opacity='0.5';
+}
+</script>
+{% endblock %}

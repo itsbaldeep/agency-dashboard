@@ -58,6 +58,9 @@
           Visibility: <strong>{{ s.get('brand_share_of_voice_pct',0) }}%</strong>
           ({{ s.get('brand_cited_count',0) }}/{{ s.get('prompts_queried',0) }})
         </span>
+        {% if eng.brand_id %}
+        <a href="/engagements/brand/{{ eng.brand_id }}/report" class="btn btn-xs btn-primary">Full Report</a>
+        {% endif %}
       </div>
     </div>
     {% endfor %}
