@@ -8,10 +8,10 @@
 <div class="card" style="margin-bottom:20px;">
   <div class="card-title mb-2">Add Competitor</div>
   <form id="add-competitor-form" style="display:flex; gap:10px; flex-wrap:wrap;">
-    <select id="ac-brand" required>
-      <option value="">Brand…</option>
-      {% for b in brands %}
-      <option value="{{ b.id }}">{{ b.name }}{% if b.project_name %} ({{ b.project_name }}){% endif %}</option>
+    <select id="ac-project" required>
+      <option value="">Project / App…</option>
+      {% for p in projects %}
+      <option value="{{ p.id }}">{{ p.name }}{% if p.brand_id %} ✓{% endif %}</option>
       {% endfor %}
     </select>
     <input type="text" id="ac-name" placeholder="Name (optional)" style="flex:1; min-width:150px;">
@@ -117,11 +117,11 @@ document.getElementById('add-competitor-form').addEventListener('submit', async 
   e.preventDefault();
   var msg = document.getElementById('add-competitor-msg');
   var btn = this.querySelector('button[type=submit]');
-  var brand = document.getElementById('ac-brand').value;
+  var brand = document.getElementById('ac-project').value;
   var name = document.getElementById('ac-name').value.trim();
   var domain = document.getElementById('ac-domain').value.trim();
   var sitemap = document.getElementById('ac-sitemap').value.trim();
-  var body = new URLSearchParams({brand_id: brand, name: name, domain: domain, sitemap_url: sitemap});
+  var body = new URLSearchParams({project_id: brand, name: name, domain: domain, sitemap_url: sitemap});
   btn.disabled = true;
   btn.textContent = 'Adding…';
   try {

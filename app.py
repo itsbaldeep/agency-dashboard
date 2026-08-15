@@ -633,11 +633,15 @@ def competitors():
             ORDER BY b.name, c.domain
         """)
         comps = cur.fetchall()
-        # Brands available for the add-competitor form
-        cur.execute("""SELECT b.id, b.name, p.name AS project_name
-                       FROM brands b LEFT JOIN projects p ON p.id = b.project_id
-                       ORDER BY b.name""")
-        brands = cur.fetchall()
+        # Projects available for the add-competitor form (scaffolded/onboarded apps).
+        # The brand for a project is resolved/created on add.
+        cur.execute("""SELECT p.id, p.name,
+                              b.id AS brand_id, b.name AS brand_name
+                       FROM projects p
+                       LEFT JOIN brands b ON b.project_id = p.id
+                       WHERE p.name NOT IN ('dashboard', 'agency-os', 'agency-dashboard', 'system')
+                       ORDER BY p.name""")
+        projects = cur.fetchall()
         # Fetch recent non-baseline pages for enabled competitors
         recent_pages = {}
         for comp in comps:
@@ -653,19 +657,19 @@ def competitors():
                 LIMIT 25
             """, (comp["id"],))
             recent_pages[comp["id"]] = cur.fetchall()
-        return render_template("competitors.html", competitors=comps, recent_pages=recent_pages, brands=brands)
+        return render_template("competitors.html", competitors=comps, recent_pages=recent_pages, projects=projects)
     finally:
         conn.close()
 
 
 @app.route("/competitors/add", methods=["POST"])
 def competitor_add():
-    brand_id = request.form.get("brand_id", type=int)
+    project_id = request.form.get("project_id", type=int)
     name = request.form.get("name", "").strip()
     domain = request.form.get("domain", "").strip().lower().removeprefix("https://").removeprefix("http://").removeprefix("www.")
     sitemap_url = request.form.get("sitemap_url", "").strip()
-    if not brand_id:
-        return jsonify({"ok": False, "error": "brand_id is required"}), 400
+    if not project_id:
+        return jsonify({"ok": False, "error": "project_id is required"}), 400
     if not domain:
         return jsonify({"ok": False, "error": "domain is required"}), 400
     if not re.fullmatch(r"[a-z0-9.\-]+\.[a-z]{2,}", domain):
@@ -673,13 +677,24 @@ def competitor_add():
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id FROM brands WHERE id=%s", (brand_id,))
-        if not cur.fetchone():
-            return jsonify({"ok": False, "error": "brand not found"}), 404
+        cur.execute("SELECT id, name FROM projects WHERE id=%s", (project_id,))
+        proj = cur.fetchone()
+        if not proj:
+            return jsonify({"ok": False, "error": "project not found"}), 404
+        # Resolve (or create) the brand for this project
+        cur.execute("SELECT id FROM brands WHERE project_id=%s", (project_id,))
+        brand = cur.fetchone()
+        if not brand:
+            slug = re.sub(r'[^a-z0-9]+', '-', (name or domain.split(".")[0]).lower()).strip('-')[:40]
+            cur.execute(
+                "INSERT INTO brands (name, slug, access_tier, project_id) VALUES (%s, %s, '0', %s) "
+                "ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name, project_id=EXCLUDED.project_id RETURNING id",
+                (proj["name"], slug, project_id))
+            brand = cur.fetchone()
         cur.execute(
             "INSERT INTO competitors (brand_id, domain, name, scan_enabled, sitemap_url) "
             "VALUES (%s, %s, %s, true, %s) RETURNING id",
-            (brand_id, domain, name or domain.split(".")[0].title(), sitemap_url or None))
+            (brand["id"], domain, name or domain.split(".")[0].title(), sitemap_url or None))
         comp_id = cur.fetchone()["id"]
         params = json.dumps({"competitor_id": comp_id})
         cur.execute(
