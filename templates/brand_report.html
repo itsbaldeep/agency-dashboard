@@ -407,11 +407,16 @@
         2. Validate with Google's <a href="https://search.google.com/test/rich-results" target="_blank">Rich Results Test</a>.<br>
         3. Submit the page to Search Console for re-crawling.<br>
         4. Re-run this audit to verify detection.
-        {% elif is_code %}
+        {% elif is_code and agent_allowed %}
         1. Review the change description above.<br>
         2. Click "Implement Now" to have the agent create a PR.<br>
         3. Review the PR on GitHub.<br>
         4. Merge after testing, then re-run the audit.
+        {% elif is_code %}
+        1. Review the suggestion rationale above.<br>
+        2. Implement the change on the site (developer task).<br>
+        3. Request code access (GitHub repo link) to enable automated implementation.<br>
+        4. Re-run this audit to verify the fix.
         {% else %}
         1. Review the suggestion rationale above.<br>
         2. Implement the change on your site.<br>
