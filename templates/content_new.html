@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>New Content</h1>
+  <div class="sub">Research → Outline → <b>Inspect</b> → Compose</div>
+</div>
+
+{# ── Step 1: Research + Outline form ── #}
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header">
+    <span class="card-title">Step 1 — Research &amp; Outline</span>
+    <span class="badge badge-dim">cheap stage</span>
+  </div>
+  <p class="subtle" style="margin-top:0;">
+    Pick a brand, enter a target keyword and competitor URLs. This queues a
+    <code>content_research</code> task that auto-chains to <code>content_outline</code>.
+    You'll inspect the outline before any compose budget is spent.
+  </p>
+  <form method="post" action="/content/new">
+    <div class="mb-2">
+      <label class="subtle">Brand / Project</label>
+      <select name="brand_id" required style="width:100%;margin-top:4px;">
+        {% for p in projects %}
+        <option value="{{ p.brand_id }}">{{ p.name }} — {{ p.brand_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="mb-2">
+      <label class="subtle">Target keyword</label>
+      <input type="text" name="target_keyword" placeholder="e.g. physical therapy benefits" required style="width:100%;margin-top:4px;">
+    </div>
+    <div class="mb-2">
+      <label class="subtle">Article title (optional)</label>
+      <input type="text" name="title" placeholder="Custom title or leave blank for auto" style="width:100%;margin-top:4px;">
+    </div>
+    <div class="mb-2">
+      <label class="subtle">Competitor URLs (one per line)</label>
+      <textarea name="competitor_urls" rows="5" placeholder="https://example.com/article-1&#10;https://example.com/article-2" required style="width:100%;margin-top:4px;">{% if prefill_url %}{{ prefill_url }}{% endif %}</textarea>
+    </div>
+    <button class="btn btn-primary" type="submit">Run Research + Outline →</button>
+  </form>
+</div>
+
+{# ── Step 2 + 3: Outline inspection & compose gate ── #}
+{% if outline_item %}
+{% set blocks = outline_item.structured_obj.get('blocks', []) %}
+{% set kw = outline_item.structured_obj.get('target_keyword', '') %}
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header">
+    <span class="card-title">Step 2 — Inspect Outline</span>
+    <span class="badge {{ outline_item.status }}">{{ outline_item.status }}</span>
+  </div>
+  <div style="margin:8px 0;">
+    <b>{{ outline_item.title }}</b>
+    <span class="subtle"> · content item #{{ outline_item.id }} · created {{ outline_item.created_at }}</span>
+  </div>
+
+  {% if blocks %}
+  {# Block type chips #}
+  <div class="mb-2" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;">
+    {% for b in blocks %}
+    <span class="content-block-type {{ b.type }}">{{ b.type }}</span>
+    {% endfor %}
+  </div>
+  {# Block briefs as inspectable list #}
+  <ol style="margin:10px 0;padding-left:18px;">
+    {% for b in blocks %}
+    <li class="content-block-brief" style="margin-bottom:6px;">
+      <b>{{ b.type }}</b>
+      {% if b.chart_type %}<span class="subtle">({{ b.chart_type }})</span>{% endif %}
+      — {{ b.brief }}
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">No outline blocks found in structured data.</p>
+  {% endif %}
+</div>
+
+{# Step 3: Compose gate #}
+<div class="card" style="margin-bottom:20px;border:2px solid var(--amber);">
+  <div class="card-header">
+    <span class="card-title">Step 3 — Compose Gate</span>
+    <span class="badge badge-dim">spend gate</span>
+  </div>
+  <p class="subtle" style="margin-top:0;">
+    Composing will run the full article generation (~8-14 model calls). Review the
+    outline above before proceeding.
+  </p>
+  {% if outline_item.status == 'outline' %}
+  <form method="post" action="/content/{{ outline_item.id }}/compose">
+    <input type="hidden" name="target_keyword" value="{{ kw }}">
+    <button class="btn btn-green" type="submit">Compose this outline →</button>
+    <a class="btn" href="/content/{{ outline_item.id }}/preview" target="_blank">Preview current</a>
+  </form>
+  {% elif outline_item.status == 'draft' %}
+  <p>This outline has already been composed. <a href="/content/{{ outline_item.id }}/preview">Preview the article →</a></p>
+  {% elif outline_item.status == 'approved' %}
+  <p><span class="badge approved">approved</span> — <a href="/content/{{ outline_item.id }}/preview">Preview →</a></p>
+  {% else %}
+  <p class="subtle">Status: {{ outline_item.status }}</p>
+  {% endif %}
+</div>
+{% else %}
+{# Show recent outlines pending inspection #}
+<div class="card">
+  <div class="card-title mb-2">Step 2 — Pending outlines</div>
+  <p class="subtle" style="margin-top:0;">After research+outline completes, come back here and pick an outline to inspect.</p>
+  <div id="pending-outlines"
+       hx-get="/content/new/outlines"
+       hx-trigger="load, every 15s"
+       hx-select="#pending-outlines"
+       hx-swap="outerHTML">
+  </div>
+</div>
+{% endif %}
+
+<a href="/content" class="btn">&larr; Back to Content</a>
+{% endblock %}

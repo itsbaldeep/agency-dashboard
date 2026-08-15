@@ -502,10 +502,170 @@ def content():
     return render_template("content.html")
 
 
+@app.route("/content/new", methods=["GET"])
+def content_new():
+    """Content drafting wizard: pick project/brand, run research+outline, inspect, gate compose."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT p.id, p.name, b.id AS brand_id, b.name AS brand_name
+                       FROM projects p JOIN brands b ON b.project_id=p.id
+                       ORDER BY p.name""")
+        projects = cur.fetchall()
+        # Check for outline-status items to show in step 2/3
+        outline_item_id = request.args.get("outline", type=int)
+        outline_item = None
+        if outline_item_id:
+            cur.execute("""SELECT ci.id, ci.title, ci.status, ci.structured, ci.content_blocks,
+                                  ci.created_at, ci.task_id
+                           FROM content_items ci WHERE ci.id=%s""", (outline_item_id,))
+            outline_item = cur.fetchone()
+            if outline_item:
+                # Parse structured for template use
+                s = outline_item.get("structured")
+                if isinstance(s, str):
+                    try:
+                        s = json.loads(s)
+                    except (json.JSONDecodeError, TypeError):
+                        s = {}
+                outline_item["structured_obj"] = s or {}
+        return render_template("content_new.html", projects=projects, outline_item=outline_item,
+                               prefill_url=request.args.get("url", ""))
+    finally:
+        conn.close()
+
+
+@app.route("/content/new/outlines")
+def content_new_outlines():
+    """HTMX fragment: list outline-status items pending inspection."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT ci.id, ci.title, ci.status, ci.created_at
+                       FROM content_items ci WHERE ci.status='outline'
+                       ORDER BY ci.created_at DESC LIMIT 10""")
+        outlines = cur.fetchall()
+        return render_template("fragments/pending_outlines.html", outlines=outlines)
+    finally:
+        conn.close()
+
+
+@app.route("/content/new", methods=["POST"])
+def content_new_submit():
+    """Queue content_research for the selected brand. Redirect to the task page."""
+    keyword = request.form.get("target_keyword", "").strip()
+    urls_raw = request.form.get("competitor_urls", "").strip()
+    title = request.form.get("title", "").strip()
+    brand_id = request.form.get("brand_id", "").strip()
+    if not keyword or not urls_raw or not brand_id:
+        return redirect("/content/new")
+    urls = [u.strip() for u in urls_raw.splitlines() if u.strip()]
+    if not urls:
+        return redirect("/content/new")
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        params = {
+            "target_keyword": keyword, "competitor_urls": urls,
+            "brand_id": int(brand_id), "source": "dashboard",
+        }
+        if title:
+            params["title"] = title
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('content_research', 'queued', %s, 'dashboard') RETURNING id",
+            (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect("/tasks/%d" % task_id)
+
+
+@app.route("/content/<int:item_id>/compose", methods=["POST"])
+def content_compose_gate(item_id):
+    """Wizard compose gate: queue content_compose after human inspects the outline."""
+    target_keyword = request.form.get("target_keyword", "").strip()
+    if not target_keyword:
+        return redirect("/content/new?outline=%d" % item_id)
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, status FROM content_items WHERE id=%s", (item_id,))
+        row = cur.fetchone()
+        if not row or row["status"] != "outline":
+            return redirect("/content/new?outline=%d" % item_id)
+        params = json.dumps({"content_item_id": item_id, "target_keyword": target_keyword, "source": "dashboard"})
+        cur.execute(
+            "INSERT INTO tasks (type, status, params, triggered_by) "
+            "VALUES ('content_compose', 'queued', %s, 'dashboard') RETURNING id", (params,))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect("/tasks/%d" % task_id)
+
+
 @app.route("/content/data")
 def content_data():
     data = models.get_content()
     return render_template("fragments/content_list.html", **data)
+
+
+# ── Competitors ──────────────────────────────────────────────────
+
+@app.route("/competitors")
+def competitors():
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT c.id, c.brand_id, c.domain, c.name, c.scan_enabled,
+                   c.sitemap_url, c.last_scanned_at, b.name AS brand_name,
+                   (SELECT count(*) FROM competitor_pages p WHERE p.competitor_id = c.id) AS total_pages,
+                   (SELECT count(*) FROM competitor_pages p WHERE p.competitor_id = c.id
+                    AND p.first_seen_at > now() - interval '30 days'
+                    AND p.first_seen_at > (SELECT min(first_seen_at) + interval '1 hour'
+                                           FROM competitor_pages p2 WHERE p2.competitor_id = p.competitor_id)
+                   ) AS recent_pages
+            FROM competitors c
+            LEFT JOIN brands b ON b.id = c.brand_id
+            ORDER BY b.name, c.domain
+        """)
+        comps = cur.fetchall()
+        # Fetch recent non-baseline pages for enabled competitors
+        recent_pages = {}
+        for comp in comps:
+            if not comp["scan_enabled"]:
+                continue
+            cur.execute("""
+                SELECT p.url, p.title, p.lastmod, p.first_seen_at
+                FROM competitor_pages p
+                WHERE p.competitor_id = %s
+                  AND p.first_seen_at > (SELECT min(first_seen_at) + interval '1 hour'
+                                         FROM competitor_pages p2 WHERE p2.competitor_id = p.competitor_id)
+                ORDER BY p.first_seen_at DESC
+                LIMIT 25
+            """, (comp["id"],))
+            recent_pages[comp["id"]] = cur.fetchall()
+        return render_template("competitors.html", competitors=comps, recent_pages=recent_pages)
+    finally:
+        conn.close()
+
+
+@app.route("/competitors/<int:cid>/toggle", methods=["POST"])
+def competitor_toggle(cid):
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE competitors SET scan_enabled = NOT scan_enabled WHERE id=%s RETURNING scan_enabled", (cid,))
+        row = cur.fetchone()
+        conn.commit()
+        if not row:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        return jsonify({"ok": True, "scan_enabled": row["scan_enabled"]})
+    finally:
+        conn.close()
 
 
 @app.route("/content/<int:item_id>/preview")
@@ -1253,15 +1413,27 @@ def task_detail(task_id):
             except (json.JSONDecodeError, TypeError):
                 d["result_pretty"] = rr
         ci = None
+        outline_ci = None
         if d.get("type") == "generate_draft" and d.get("status") == "done":
             cur.execute(
                 "SELECT id, title FROM content_items WHERE task_id=%s ORDER BY id DESC LIMIT 1",
                 (task_id,),
             )
             ci = cur.fetchone()
+        elif d.get("type") == "content_outline" and d.get("status") == "done":
+            cur.execute(
+                "SELECT id, title, status FROM content_items WHERE task_id=%s ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            )
+            outline_ci = cur.fetchone()
+        elif d.get("type") == "content_compose" and d.get("status") == "done":
+            ci_id = d.get("params_obj", {}).get("content_item_id")
+            if ci_id:
+                cur.execute("SELECT id, title FROM content_items WHERE id=%s", (ci_id,))
+                ci = cur.fetchone()
     finally:
         conn.close()
-    return render_template("task_detail.html", t=d, ci=ci)
+    return render_template("task_detail.html", t=d, ci=ci, outline_ci=outline_ci)
 
 
 # ── Job Search Routes ──────────────────────────────────────────
