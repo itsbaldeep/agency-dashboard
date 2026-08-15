@@ -8,6 +8,66 @@
 <div class="card"><p class="empty">STATE.md not found at the repo path.</p></div>
 {% else %}
 
+{# ── Loop status card ── #}
+{% if loop %}
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header">
+    <span class="card-title">Loop Status</span>
+    {% if loop.enabled %}
+      <span class="badge ok">ENABLED</span>
+    {% else %}
+      <span class="badge no">DISABLED</span>
+    {% endif %}
+    {% if loop.active_blocks > 0 %}
+      <span class="badge badge-amber">{{ loop.active_blocks }} active</span>
+    {% endif %}
+  </div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;">
+    <div><span class="subtle">Schedule:</span> <b>{{ loop.schedule }}</b></div>
+    {% if loop.enabled %}
+    <div><span class="subtle">Next run:</span> <b>top of the next hour</b></div>
+    {% else %}
+    <div><span class="subtle">Next run:</span> <b>— (disabled)</b></div>
+    {% endif %}
+    <div><span class="subtle">Today:</span> <b>${{ "%.2f"|format(loop.daily_spent) }}</b> / ${{ "%.2f"|format(loop.daily_budget) }} ({{ loop.daily_blocks }} blocks)</div>
+  </div>
+  {% if loop.manual_present %}
+  <div style="margin-top:6px;color:var(--warn,#e8b54f);">
+    ⚠️ <b>.manual</b> lock present — loop will skip until removed (or it expires after 24h).
+  </div>
+  {% endif %}
+  {% if not loop.enabled %}
+  <div style="margin-top:6px;color:var(--warn,#e8b54f);">
+    Job 12 is disabled. Enable it from <a href="/operations">Operations</a> → Jobs → toggle job #12.
+    Before enabling: commit/stash any uncommitted changes in the aetheria repo (the handler's
+    <code>git pull --ff-only</code> will fail on a dirty tree).
+  </div>
+  {% endif %}
+  {% if loop.last_block %}
+  <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+    <span class="subtle">Last block:</span>
+    <a href="/tasks/{{ loop.last_block.id }}">#{{ loop.last_block.id }}</a>
+    <span class="badge {{ loop.last_block.status }}">{{ loop.last_block.status }}</span>
+    {% if loop.last_block.progress_text %} <span class="subtle">{{ loop.last_block.progress_text[:100] }}</span>{% endif %}
+    {% if loop.last_block.cost %} <span class="subtle">${{ "%.4f"|format(loop.last_block.cost|float) }}</span>{% endif %}
+  </div>
+  {% endif %}
+  {% if loop.runs %}
+  <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+    <span class="subtle">Recent job-12 runs:</span>
+    {% for r in loop.runs[:3] %}
+    <div class="card-list-sub">
+      <span class="badge {{ r.status }}">{{ r.status }}</span>
+      {{ r.started_at.strftime('%H:%M') if r.started_at else '' }}
+      {% if r.duration_sec %}· {{ r.duration_sec }}s{% endif %}
+      {% if r.detail %}· {{ r.detail[:80] }}{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 {# ── Milestone + progress card ── #}
 <div class="card" style="margin-bottom:20px;">
   <div class="card-header">

@@ -1011,8 +1011,14 @@ def get_game_status(repo_path=AETHERIA_REPO_PATH):
         except Exception:
             pass
 
-    # Gallery URL + download URL (known from the project's subdomains)
-    gallery_url = "https://admin.aetheria.apps.deployden.tech/screens"
+    # Gallery URL + download URL (known from the project's subdomains).
+    # Include the screens token (from env) so the dashboard link works in one
+    # click — the gallery exchanges ?t for an HttpOnly cookie on first visit.
+    _screens_token = _os.environ.get("AETHERIA_SCREENS_TOKEN", "")
+    if _screens_token:
+        gallery_url = f"https://admin.aetheria.apps.deployden.tech/screens?t={_screens_token}"
+    else:
+        gallery_url = "https://admin.aetheria.apps.deployden.tech/screens"
     download_url = "https://aetheria.apps.deployden.tech/download"
 
     # Raw GitHub links for STATE.md + CHANGELOG
@@ -1080,5 +1086,62 @@ def get_game_pending_approvals():
                 except (json.JSONDecodeError, TypeError):
                     a["payload"] = {}
         return approvals
+    finally:
+        conn.close()
+
+
+def get_loop_status():
+    """Job 12 state + next run estimate + loop health for the dashboard."""
+    conn = db()
+    try:
+        cur = conn.cursor()
+        # Job 12 config + last run
+        cur.execute("SELECT id, name, schedule, enabled, script_path FROM background_jobs WHERE id=12")
+        job = cur.fetchone()
+        if not job:
+            return {"enabled": False, "schedule": "—", "next_run": "—"}
+        # Last few job runs
+        cur.execute("""
+            SELECT id, status, started_at, finished_at, duration_sec, detail
+            FROM job_runs WHERE job_id=12 ORDER BY started_at DESC LIMIT 5
+        """)
+        runs = cur.fetchall()
+        # Is a work block currently queued or running?
+        cur.execute("""
+            SELECT count(*) AS c FROM tasks
+            WHERE type='aetheria_work_block' AND status IN ('queued','running')
+        """)
+        active = cur.fetchone()["c"]
+        # Last completed work block
+        cur.execute("""
+            SELECT id, status, finished_at, progress_text, cost, error
+            FROM tasks WHERE type='aetheria_work_block'
+            ORDER BY id DESC LIMIT 1
+        """)
+        last_block = cur.fetchone()
+        # Today's spend on aetheria work blocks
+        cur.execute("""
+            SELECT COALESCE(sum(cost), 0) AS spent,
+                   count(*) AS blocks
+            FROM tasks WHERE type='aetheria_work_block'
+              AND cost IS NOT NULL
+              AND finished_at >= date_trunc('day', now())
+        """)
+        spend = cur.fetchone()
+        # .manual present?
+        import os as _os
+        manual_present = _os.path.isfile("/home/agency/projects/aetheria/.manual")
+        return {
+            "enabled": job["enabled"],
+            "schedule": job["schedule"],
+            "script_path": job["script_path"],
+            "runs": runs,
+            "active_blocks": active,
+            "last_block": last_block,
+            "daily_spent": float(spend["spent"] or 0),
+            "daily_blocks": spend["blocks"],
+            "daily_budget": float(_os.environ.get("AETHERIA_DAILY_BUDGET_USD", "3.00")),
+            "manual_present": manual_present,
+        }
     finally:
         conn.close()

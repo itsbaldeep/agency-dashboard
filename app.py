@@ -1679,6 +1679,7 @@ def aetheria_data():
     status = models.get_game_status()
     work_blocks = models.get_game_work_blocks()
     pending_approvals = models.get_game_pending_approvals()
+    loop = models.get_loop_status()
     # Format for template
     for t in work_blocks:
         t["created_fmt"] = fmt_ts(t.get("created_at"))
@@ -1696,7 +1697,7 @@ def aetheria_data():
             t["result"] = {}
     return render_template("fragments/aetheria_status.html",
                            status=status, work_blocks=work_blocks,
-                           pending_approvals=pending_approvals)
+                           pending_approvals=pending_approvals, loop=loop)
 
 
 @app.route("/aetheria/work-block/<int:tid>/monitor")
