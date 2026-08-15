@@ -5,15 +5,24 @@
      hx-swap="outerHTML">
   <div class="card-header"><span class="card-title">Articles ({{ articles|length }})</span></div>
   {% for ci in articles %}
-  <div class="suggestion-card">
+  <div class="suggestion-card status-{{ ci.status }}">
     <div class="gap-2 flex-center">
       <span style="flex:1;font-weight:600;font-size:13px;color:var(--text-bright)">{{ ci.title }}</span>
       <span class="badge badge-dim">{{ ci.content_type }}</span>
       <span class="badge {{ ci.status }}">{{ ci.status }}</span>
       <span class="subtle">{{ ci.brand_name }}</span>
     </div>
+    <div class="mt-1 subtle" style="font-size:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+      {% if ci.created_at %}<span>{{ ci.created_at.strftime('%Y-%m-%d %H:%M') }}</span>{% endif %}
+      {% if ci.task_id %}
+      <a href="/tasks/{{ ci.task_id }}" class="subtle" style="text-decoration:underline">task #{{ ci.task_id }}</a>
+      {% if ci.task_model %}<span>model: {{ ci.task_model }}</span>{% endif %}
+      {% if ci.task_cost %}<span>cost: ${{ '%.4f'|format(ci.task_cost|float) }}</span>{% endif %}
+      {% if ci.task_duration_s %}<span>dur: {{ ci.task_duration_s }}s</span>{% endif %}
+      {% endif %}
+    </div>
     <div class="mt-2 gap-2">
-      {% if ci.body %}
+      {% if ci.body or ci.content_blocks %}
       <a href="/content/{{ ci.id }}/preview" target="_blank" class="btn btn-sm">Preview</a>
       <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
       {% endif %}

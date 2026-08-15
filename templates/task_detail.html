@@ -61,6 +61,14 @@
 </div>
 {% endif %}
 
+{% if outline_ci %}
+<div class="card">
+  <div class="card-title mb-2">Outline ready</div>
+  <p class="subtle">Content item #{{ outline_ci.id }} — <b>{{ outline_ci.title }}</b> (status: {{ outline_ci.status }})</p>
+  <a class="btn btn-primary" href="/content/new?outline={{ outline_ci.id }}">Inspect outline &amp; compose &rarr;</a>
+</div>
+{% endif %}
+
 <!-- Re-run modal -->
 <div class="modal-overlay" id="rerun-modal" onclick="if(event.target===this)closeRerun()">
   <div class="modal-box">

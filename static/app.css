@@ -338,3 +338,7 @@ select option{background:var(--surface);color:var(--text)}
 .content-block-type.faq{background:var(--red-dim);color:var(--red)}
 .content-block-type.image_slot{background:rgba(165,114,255,0.14);color:var(--purple)}
 .badge.outline{background:var(--accent-glow);color:var(--accent)}
+.badge.draft{background:var(--amber-dim);color:var(--amber)}
+.suggestion-card.status-outline{border-left:3px solid var(--accent)}
+.suggestion-card.status-draft{border-left:3px solid var(--amber)}
+.suggestion-card.status-approved{border-left:3px solid var(--green)}

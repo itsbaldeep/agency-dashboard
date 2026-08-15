@@ -458,9 +458,16 @@ def get_content():
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT ci.*, b.name AS brand_name
+            SELECT ci.*, b.name AS brand_name,
+                   t.id AS task_id, t.cost AS task_cost,
+                   t.started_at AS task_started, t.finished_at AS task_finished,
+                   t.params->>'model' AS task_model,
+                   CASE WHEN t.started_at IS NOT NULL AND t.finished_at IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (t.finished_at - t.started_at))::int
+                        ELSE NULL END AS task_duration_s
             FROM content_items ci
             JOIN brands b ON b.id = ci.brand_id
+            LEFT JOIN tasks t ON t.id = ci.task_id
             ORDER BY ci.created_at DESC
         """)
         articles = cur.fetchall()

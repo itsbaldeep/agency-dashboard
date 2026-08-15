@@ -1,0 +1,21 @@
+<div id="pending-outlines"
+     hx-get="/content/new/outlines"
+     hx-trigger="load, every 15s"
+     hx-select="#pending-outlines"
+     hx-swap="outerHTML">
+  {% if outlines %}
+  <div class="card-list">
+    {% for o in outlines %}
+    <div class="card-list-item">
+      <div class="card-list-main">
+        <a href="/content/new?outline={{ o.id }}">{{ o.title }}</a>
+        <span class="badge {{ o.status }}">{{ o.status }}</span>
+      </div>
+      <div class="card-list-sub">#{{ o.id }} · {{ o.created_at or '' }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No pending outlines. Run Research + Outline above.</p>
+  {% endif %}
+</div>
