@@ -513,7 +513,7 @@ def content_preview(item_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT title, body, structured FROM content_items WHERE id=%s", (item_id,))
+        cur.execute("SELECT title, body, structured, content_blocks FROM content_items WHERE id=%s", (item_id,))
         ci = cur.fetchone()
         if not ci:
             return "Not found", 404
@@ -521,6 +521,25 @@ def content_preview(item_id):
                   'padding:10px 14px;margin-bottom:16px;border-radius:6px;font-size:14px;">'
                   '&#9888; Preview only &#8212; final appearance depends on the target project\'s own site.'
                   '</div>')
+        # New pipeline output: render typed content_blocks.
+        blocks = ci.get('content_blocks')
+        if isinstance(blocks, str):
+            try:
+                blocks = json.loads(blocks)
+            except json.JSONDecodeError:
+                blocks = None
+        if isinstance(blocks, list) and blocks:
+            sys.path.insert(0, "/home/agency/agency-os/scripts")
+            import importlib
+            cp = importlib.import_module("content_pipeline")
+            blocks = cp.ensure_slot_images(item_id, blocks)
+            if any(b.get("type") == "image_slot" for b in blocks):
+                cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
+                            (json.dumps(blocks), item_id))
+                conn.commit()
+            content = banner + cp.render_pipeline_css() + \
+                f"<div class='pipeline-article'>{cp.render_content_blocks(blocks, ci['title'])}</div>"
+            return render_template("base.html", title=ci['title'], content=content)
         structured = ci.get('structured')
         if isinstance(structured, str):
             try:
@@ -546,6 +565,38 @@ def content_preview(item_id):
             html = markdown.markdown(ci['body'] or '*No content generated yet.*')
             content = banner + f"<h1>{ci['title']}</h1>{html}"
         return render_template("base.html", title=ci['title'], content=content)
+    finally:
+        conn.close()
+
+
+@app.route("/content/<int:item_id>/images", methods=["POST"])
+def content_images(item_id):
+    """Generate + store slot images for a content item's image_slots (MinIO)."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT content_blocks FROM content_items WHERE id=%s", (item_id,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        blocks = row.get("content_blocks")
+        if isinstance(blocks, str):
+            try:
+                blocks = json.loads(blocks)
+            except json.JSONDecodeError:
+                blocks = None
+        if not isinstance(blocks, list):
+            return jsonify({"ok": False, "error": "no content_blocks"}), 400
+        sys.path.insert(0, "/home/agency/agency-os/scripts")
+        import importlib
+        cp = importlib.import_module("content_pipeline")
+        blocks = cp.ensure_slot_images(item_id, blocks)
+        cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
+                    (json.dumps(blocks), item_id))
+        conn.commit()
+        made = [b for b in blocks if b.get("type") == "image_slot" and b.get("url")]
+        return jsonify({"ok": True, "slots": len(made),
+                        "urls": [b["url"] for b in made]})
     finally:
         conn.close()
 
