@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="content-actionbar">
+  <div class="content-actionbar-info">
+    <a href="/content" class="content-actionbar-back">&larr;</a>
+    <span class="content-actionbar-title">{{ ci.title }}</span>
+    <span class="badge {{ ci.status }}">{{ ci.status }}</span>
+    {% if ci.brand_name %}<span class="content-actionbar-brand subtle">{{ ci.brand_name }}</span>{% endif %}
+    {% if updated_fmt %}<span class="content-actionbar-date subtle">{{ updated_fmt }}</span>{% endif %}
+  </div>
+  <div class="content-actionbar-actions gap-2">
+    {% if ci.body or ci.content_blocks %}
+    <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
+    {% endif %}
+    {% if ci.status in ('draft', 'outline') %}
+    <button class="btn btn-sm btn-green" onclick="approveContent({{ ci.id }})">Approve</button>
+    {% endif %}
+    {% if ci.status == 'draft' %}
+    <button class="btn btn-sm" onclick="regenerateContent({{ ci.id }})">Regenerate</button>
+    {% endif %}
+    {% if ci.status == 'outline' %}
+    <a href="/content/new?outline={{ ci.id }}" class="btn btn-sm btn-primary">Compose Full Draft</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="content-preview-body">
+  {{ body_html|safe }}
+</div>
+
+<script>
+async function approveContent(id) {
+  await fetch('/content/'+id+'/approve', {method:'POST'});
+  location.reload();
+}
+async function regenerateContent(id) {
+  if (!confirm('Regenerate this content? The current draft will be cleared.')) return;
+  await fetch('/content/'+id+'/regenerate', {method:'POST'});
+  location.reload();
+}
+</script>
+{% endblock %}

@@ -102,18 +102,21 @@
   <div class="mb-3">
     <div class="card-title mb-2">Generated Content</div>
     {% for ci in eng.content_items %}
-    <div class="suggestion-card">
+    <div class="suggestion-card status-{{ ci.status }}">
       <div class="gap-2 flex-center">
-        <span style="font-weight:600;flex:1;font-size:13px;color:var(--text-bright)">{{ ci.title }}</span>
+        <a href="/content/{{ ci.id }}/preview" style="flex:1;font-weight:600;font-size:13px;color:var(--text-bright);text-decoration:none">{{ ci.title }}</a>
         <span class="badge {{ ci.status }}">{{ ci.status }}</span>
       </div>
+      <div class="mt-1 content-row-meta subtle">
+        {% if ci.updated_at %}<span>{{ ci.updated_at.strftime('%Y-%m-%d %H:%M') }}</span>{% elif ci.created_at %}<span>{{ ci.created_at.strftime('%Y-%m-%d %H:%M') }}</span>{% endif %}
+      </div>
       <div class="mt-2 gap-2">
-        {% if ci.body %}
-        <a href="/content/{{ ci.id }}/download" class="btn btn-sm btn-primary">Download</a>
-        {% endif %}
-        {% if ci.status == 'draft' %}
-        <button class="btn btn-sm btn-green" onclick="approveContent({{ ci.id }})">Approve</button>
-        <button class="btn btn-sm" onclick="regenerateContent({{ ci.id }})">Regenerate</button>
+        {% if ci.status == 'outline' %}
+        <a href="/content/new?outline={{ ci.id }}" class="btn btn-sm btn-primary">Continue to Draft</a>
+        {% elif ci.status == 'draft' %}
+        <a href="/content/{{ ci.id }}/preview" class="btn btn-sm">Preview</a>
+        {% elif ci.status == 'approved' %}
+        <a href="/content/{{ ci.id }}/preview" class="btn btn-sm">Preview</a>
         {% endif %}
       </div>
     </div>
@@ -178,13 +181,5 @@ async function pollDraft(sid, el) {
       else if (d.status === 'failed') { el.innerHTML = '<div class="subtle" style="color:var(--red)">Failed: '+(d.error||'')+'</div>'; return; }
     } catch(e) { if(i>25) return; }
   }
-}
-async function approveContent(ci_id) {
-  await fetch('/content/'+ci_id+'/approve', {method:'POST'});
-  location.reload();
-}
-async function regenerateContent(ci_id) {
-  await fetch('/content/'+ci_id+'/regenerate', {method:'POST'});
-  location.reload();
 }
 </script>

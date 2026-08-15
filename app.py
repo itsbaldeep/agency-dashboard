@@ -948,63 +948,81 @@ def competitor_toggle(cid):
         conn.close()
 
 
+def _render_content_body(ci, item_id, conn, cur):
+    """Render a content item's body as HTML (content_blocks → structured → body)."""
+    banner = ('<div style="background:#fff7d6;border:1px solid #e6cc66;'
+              'padding:10px 14px;margin-bottom:16px;border-radius:6px;font-size:14px;">'
+              '&#9888; Preview only &#8212; final appearance depends on the target project\'s own site.'
+              '</div>')
+    blocks = ci.get('content_blocks')
+    if isinstance(blocks, str):
+        try:
+            blocks = json.loads(blocks)
+        except json.JSONDecodeError:
+            blocks = None
+    if isinstance(blocks, list) and blocks:
+        sys.path.insert(0, "/home/agency/agency-os/scripts")
+        import importlib
+        cp = importlib.import_module("content_pipeline")
+        blocks = cp.ensure_slot_images(item_id, blocks)
+        if any(b.get("type") == "image_slot" for b in blocks):
+            cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
+                        (json.dumps(blocks), item_id))
+            conn.commit()
+        return banner + cp.render_pipeline_css() + \
+            f"<div class='pipeline-article'>{cp.render_content_blocks(blocks, ci['title'])}</div>"
+    structured = ci.get('structured')
+    if isinstance(structured, str):
+        try:
+            structured = json.loads(structured)
+        except json.JSONDecodeError:
+            structured = None
+    if structured:
+        parts = [f"<h1>{structured.get('title', ci['title'])}</h1>"]
+        if structured.get('meta_description'):
+            parts.append(f"<p><i>{structured['meta_description']}</i></p>")
+        for s in structured.get('sections', []):
+            parts.append(f"<h2>{s.get('title', s.get('heading', ''))}</h2>")
+            parts.append(markdown.markdown(s.get('body_markdown') or ''))
+        faqs = structured.get('faqs', structured.get('faq', []))
+        if faqs:
+            parts.append("<h2>FAQs</h2>")
+            for f in faqs:
+                q = f.get('q', f.get('question', ''))
+                a = f.get('a', f.get('answer', ''))
+                parts.append(f"<p><b>{q}</b><br>{markdown.markdown(a or '')}</p>")
+        return banner + "".join(parts)
+    html = markdown.markdown(ci.get('body') or '*No content generated yet.*')
+    return banner + f"<h1>{ci['title']}</h1>{html}"
+
+
 @app.route("/content/<int:item_id>/preview")
 def content_preview(item_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT title, body, structured, content_blocks FROM content_items WHERE id=%s", (item_id,))
+        cur.execute(
+            "SELECT ci.*, b.name AS brand_name "
+            "FROM content_items ci LEFT JOIN brands b ON b.id=ci.brand_id "
+            "WHERE ci.id=%s", (item_id,))
         ci = cur.fetchone()
         if not ci:
             return "Not found", 404
-        banner = ('<div style="background:#fff7d6;border:1px solid #e6cc66;'
-                  'padding:10px 14px;margin-bottom:16px;border-radius:6px;font-size:14px;">'
-                  '&#9888; Preview only &#8212; final appearance depends on the target project\'s own site.'
-                  '</div>')
-        # New pipeline output: render typed content_blocks.
-        blocks = ci.get('content_blocks')
-        if isinstance(blocks, str):
+        body_html = _render_content_body(ci, item_id, conn, cur)
+        target_keyword = ""
+        s = ci.get("structured")
+        if isinstance(s, str):
             try:
-                blocks = json.loads(blocks)
-            except json.JSONDecodeError:
-                blocks = None
-        if isinstance(blocks, list) and blocks:
-            sys.path.insert(0, "/home/agency/agency-os/scripts")
-            import importlib
-            cp = importlib.import_module("content_pipeline")
-            blocks = cp.ensure_slot_images(item_id, blocks)
-            if any(b.get("type") == "image_slot" for b in blocks):
-                cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
-                            (json.dumps(blocks), item_id))
-                conn.commit()
-            content = banner + cp.render_pipeline_css() + \
-                f"<div class='pipeline-article'>{cp.render_content_blocks(blocks, ci['title'])}</div>"
-            return render_template("base.html", title=ci['title'], content=content)
-        structured = ci.get('structured')
-        if isinstance(structured, str):
-            try:
-                structured = json.loads(structured)
-            except json.JSONDecodeError:
-                structured = None
-        if structured:
-            parts = [f"<h1>{structured.get('title', ci['title'])}</h1>"]
-            if structured.get('meta_description'):
-                parts.append(f"<p><i>{structured['meta_description']}</i></p>")
-            for s in structured.get('sections', []):
-                parts.append(f"<h2>{s.get('title', s.get('heading', ''))}</h2>")
-                parts.append(markdown.markdown(s.get('body_markdown') or ''))
-            faqs = structured.get('faqs', structured.get('faq', []))
-            if faqs:
-                parts.append("<h2>FAQs</h2>")
-                for f in faqs:
-                    q = f.get('q', f.get('question', ''))
-                    a = f.get('a', f.get('answer', ''))
-                    parts.append(f"<p><b>{q}</b><br>{markdown.markdown(a or '')}</p>")
-            content = banner + "".join(parts)
-        else:
-            html = markdown.markdown(ci['body'] or '*No content generated yet.*')
-            content = banner + f"<h1>{ci['title']}</h1>{html}"
-        return render_template("base.html", title=ci['title'], content=content)
+                s = json.loads(s)
+            except (json.JSONDecodeError, TypeError):
+                s = None
+        if isinstance(s, dict):
+            target_keyword = s.get("target_keyword", "") or ""
+        updated_fmt = fmt_ts(ci.get("updated_at") or ci.get("created_at"))
+        return render_template("content_preview.html", active='content',
+                               ci=ci, body_html=body_html,
+                               target_keyword=target_keyword,
+                               updated_fmt=updated_fmt)
     finally:
         conn.close()
 
