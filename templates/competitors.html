@@ -5,6 +5,10 @@
   <div class="sub">Tracked competitor sites and discovered pages</div>
 </div>
 
+<div class="alert alert-blue" style="margin-bottom:20px;">
+  <span><strong>How scanning works.</strong> Competitor scanning tracks a competitor's sitemap pages. The first scan establishes a baseline (N pages). Subsequent scans highlight new/changed pages &mdash; signals to attack or counter. Competitors marked <strong>unverified</strong> were auto-proposed by the AI during brand audits and should be confirmed or removed.</span>
+</div>
+
 <div class="card" style="margin-bottom:20px;">
   <div class="card-title mb-2">Add Competitor</div>
   <form id="add-competitor-form" style="display:flex; gap:10px; flex-wrap:wrap;">
@@ -27,7 +31,9 @@
   <table>
     <tr>
       <th class="subtle">Brand</th>
-      <th class="subtle">Domain</th>
+      <th class="subtle">Competitor</th>
+      <th class="subtle">Why</th>
+      <th class="subtle">Status</th>
       <th class="subtle">Scan</th>
       <th class="subtle">Last Scanned</th>
       <th class="subtle">Total Pages</th>
@@ -36,8 +42,40 @@
     </tr>
     {% for c in competitors %}
     <tr id="comp-row-{{ c.id }}">
-      <td>{{ c.brand_name or '—' }}</td>
-      <td><a href="https://{{ c.domain }}" target="_blank">{{ c.domain }}</a></td>
+      <td>
+        {% if c.brand_id %}
+        <a href="/engagements/brand/{{ c.brand_id }}">{{ c.brand_name or '—' }}</a>
+        <div class="subtle" style="font-size:11px;">
+          <a href="/engagements/brand/{{ c.brand_id }}">Engagement →</a> ·
+          <a href="/engagements/brand/{{ c.brand_id }}/report">Report →</a>
+        </div>
+        {% else %}
+        {{ c.brand_name or '—' }}
+        {% endif %}
+      </td>
+      <td>
+        <a href="https://{{ c.domain }}" target="_blank">{{ c.domain }}</a>
+        {% if c.name and c.name != c.domain %}<div class="subtle" style="font-size:11px;">{{ c.name }}</div>{% endif %}
+      </td>
+      <td class="subtle">{{ c.why or '—' }}</td>
+      <td>
+        {% if c.scan_enabled and c.last_scanned_at and c.recent_pages > 0 %}
+        <span class="badge badge-green">Scanning — {{ c.recent_pages }} new pages</span>
+        {% elif c.scan_enabled and c.last_scanned_at and c.total_pages > 0 %}
+        <span class="badge badge-blue">Baseline done — future scans track changes</span>
+        {% elif c.scan_enabled and c.last_scanned_at %}
+        <span class="badge badge-dim">Scanned — no pages found</span>
+        {% elif c.scan_enabled and not c.last_scanned_at %}
+        <span class="badge badge-amber">Queued/Enabled — first scan pending</span>
+        {% elif not c.scan_enabled and not c.last_scanned_at %}
+        <span class="badge badge-dim">Not scanned</span>
+        {% else %}
+        <span class="badge badge-dim">Disabled</span>
+        {% endif %}
+        {% if not c.domain_validated %}
+        <div style="margin-top:4px;"><span class="badge badge-amber">&#9888; unverified — proposed by audit, domain not validated</span></div>
+        {% endif %}
+      </td>
       <td>
         <button class="btn btn-sm {% if c.scan_enabled %}btn-green{% endif %}"
                 onclick="toggleScan({{ c.id }})"
@@ -46,7 +84,10 @@
         </button>
       </td>
       <td>{{ c.last_scanned_at.strftime('%Y-%m-%d %H:%M') if c.last_scanned_at else '—' }}</td>
-      <td>{{ c.total_pages }}</td>
+      <td>
+        {{ c.total_pages }}
+        {% if c.most_recent_page %}<div class="subtle" style="font-size:11px;">latest {{ c.most_recent_page.strftime('%Y-%m-%d') }}</div>{% endif %}
+      </td>
       <td>{{ c.recent_pages }}</td>
       <td>
         <button class="btn btn-sm" onclick="scanNow({{ c.id }})">Scan now</button>

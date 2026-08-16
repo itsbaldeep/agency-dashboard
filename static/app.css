@@ -450,7 +450,9 @@ details.card[open] > summary:before{content:"\25BE "}
 /* Alert boxes */
 .alert{padding:10px 14px;border-radius:8px;font-size:12px;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
 .alert-red{background:var(--red-dim);border:1px solid rgba(255,71,87,0.3)}
+.alert-blue{background:var(--accent-glow);border:1px solid rgba(125,180,255,0.25)}
 .alert strong{color:var(--red)}
+.alert-blue strong{color:var(--accent)}
 
 .ml-1{margin-left:4px}
 

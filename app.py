@@ -865,6 +865,14 @@ def content_data():
 
 # ── Competitors ──────────────────────────────────────────────────
 
+# TLDs that make a domain "look real" for competitors auto-proposed by audits.
+REAL_TLD_RE = re.compile(r"\.(?:com|in|co|net|org|io|ai|dev|store|info)$", re.IGNORECASE)
+
+
+def _norm_domain(d):
+    return (d or "").strip().lower().removeprefix("https://").removeprefix("http://").removeprefix("www.")
+
+
 @app.route("/competitors")
 def competitors():
     conn = models.db()
@@ -874,6 +882,7 @@ def competitors():
             SELECT c.id, c.brand_id, c.domain, c.name, c.scan_enabled,
                    c.sitemap_url, c.last_scanned_at, b.name AS brand_name,
                    (SELECT count(*) FROM competitor_pages p WHERE p.competitor_id = c.id) AS total_pages,
+                   (SELECT max(p.lastmod) FROM competitor_pages p WHERE p.competitor_id = c.id) AS most_recent_page,
                    (SELECT count(*) FROM competitor_pages p WHERE p.competitor_id = c.id
                     AND p.first_seen_at > now() - interval '30 days'
                     AND p.first_seen_at > (SELECT min(first_seen_at) + interval '1 hour'
@@ -893,6 +902,28 @@ def competitors():
                        WHERE p.name NOT IN ('dashboard', 'agency-os', 'agency-dashboard', 'system')
                        ORDER BY p.name""")
         projects = cur.fetchall()
+        # Domain validation is computed here (no DB flag): a domain counts as
+        # validated if it has a sitemap, has been scanned, or matches a real-TLD
+        # pattern. Auto-proposed LLM competitors usually have none of these.
+        why_by_domain = {}
+        fetched_brands = set()
+        for comp in comps:
+            domain = _norm_domain(comp["domain"])
+            comp["domain_validated"] = bool(
+                comp.get("sitemap_url") or comp.get("last_scanned_at") or REAL_TLD_RE.search(domain))
+            brand_id = comp["brand_id"]
+            if brand_id and brand_id not in fetched_brands:
+                fetched_brands.add(brand_id)
+                cur.execute(
+                    "SELECT summary->'competitors' AS competitors FROM audits "
+                    "WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1", (brand_id,))
+                row = cur.fetchone()
+                items = _parse_jsonb(row["competitors"]) if row else []
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict) and item.get("domain"):
+                            why_by_domain.setdefault(_norm_domain(item["domain"]), item.get("why"))
+            comp["why"] = why_by_domain.get(domain)
         # Fetch recent non-baseline pages for enabled competitors
         recent_pages = {}
         for comp in comps:
