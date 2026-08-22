@@ -963,22 +963,45 @@ def get_system_data():
     except Exception:
         pass
 
-    skills = []
-    skills_dir = "/home/agency/projects/.skills"
-    if os.path.isdir(skills_dir):
-        skills = sorted([f.replace(".md", "") for f in os.listdir(skills_dir) if f.endswith(".md")])
+    def registry(filename, key):
+        for base in ("/agency-config", "/home/agency/projects/agency-os/config"):
+            path = os.path.join(base, filename)
+            try:
+                with open(path) as handle:
+                    value = json.load(handle).get(key, [])
+                return value if isinstance(value, list) else []
+            except (OSError, ValueError, TypeError):
+                continue
+        return []
+
+    capabilities = registry("capabilities.json", "capabilities")
+    tools = registry("core-tools.json", "tools")
+    try:
+        running = {c.name for c in docker.DockerClient(base_url="unix:///var/run/docker.sock").containers.list()}
+    except Exception:
+        running = set()
+    for tool in tools:
+        check = tool.get("health") or ""
+        if check.startswith("container:"):
+            tool["observed"] = "healthy" if check.split(":", 1)[1] in running else "down"
+        elif check.startswith("credential:"):
+            tool["observed"] = "configured" if os.environ.get(check.split(":", 1)[1]) else "missing"
+        elif check == "systemd:opencode@4096":
+            try:
+                response = requests.get("http://100.64.0.1:4096", timeout=2)
+                tool["observed"] = "healthy" if response.status_code < 500 else "degraded"
+            except Exception:
+                tool["observed"] = "down"
+        elif check == "systemd:caddy":
+            try:
+                response = requests.get("https://deployden.tech", timeout=4)
+                tool["observed"] = "healthy" if response.status_code < 500 else "degraded"
+            except Exception:
+                tool["observed"] = "down"
+        else:
+            tool["observed"] = "operator" if check == "operator-session" else "not_configured"
 
     return {
-        "jobs": jobs, "tables": tables, "networks": networks, "skills": skills,
-        "task_types": {
-            "run_brand_audit": "Full black-box brand recon: crawl -> classify -> competitors -> visibility -> suggestions",
-            "generate_draft": "Generate blog/article from suggestion + brand context with compliance check",
-            "propose_fix": "Git branch + OpenCode headless + GitHub PR (human review required)",
-            "client_import_repo": "Clone public repo, analyze, generate AGENTS.md, create project",
-            "client_new_project": "Scaffold new project from brief on GitHub + push",
-            "design_page": "Two-stage: generate concept specs, then render chosen spec to HTML/CSS/JS",
-            "competitor_scan": "Sitemap scan for competitor pages (deterministic, zero LLM)",
-        },
+        "jobs": jobs, "tables": tables, "networks": networks,
+        "capabilities": capabilities, "tools": tools,
     }
-    if e.get("classification") == "core":
-        return "Core"

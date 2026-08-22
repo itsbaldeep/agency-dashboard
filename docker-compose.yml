@@ -12,6 +12,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /home/agency/agency-os/caddy-apps:/caddy-apps:ro
       - /home/agency/agency-os/scripts:/home/agency/agency-os/scripts:ro
+      - /home/agency/agency-os/config:/agency-config:ro
     env_file: /home/agency/agency-os/.env
     environment:
       DB_HOST: agency-postgres
