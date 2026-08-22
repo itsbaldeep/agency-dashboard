@@ -964,7 +964,7 @@ def get_system_data():
         pass
 
     def registry(filename, key):
-        for base in ("/agency-config", "/home/agency/projects/agency-os/config"):
+        for base in ("/agency-config", "/home/agency/core/agency-os/config"):
             path = os.path.join(base, filename)
             try:
                 with open(path) as handle:

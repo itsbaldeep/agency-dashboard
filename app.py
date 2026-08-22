@@ -1731,10 +1731,10 @@ def design_file(project, vid):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT cv.file_path, p.name AS slug FROM concept_variations cv JOIN projects p ON p.id=cv.project_id WHERE cv.id=%s", (vid,))
+        cur.execute("SELECT cv.file_path, p.local_path FROM concept_variations cv JOIN projects p ON p.id=cv.project_id WHERE cv.id=%s", (vid,))
         row = cur.fetchone()
-        if row and row[0]:
-            fpath = f"/home/agency/projects/{row[1]}/{row[0]}"
+        if row and row[0] and row[1]:
+            fpath = os.path.join(row[1], row[0])
             try:
                 return send_file(fpath)
             except Exception:
