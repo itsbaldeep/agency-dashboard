@@ -1,12 +1,9 @@
-import concurrent.futures
 import json
 import os
 import re
-import subprocess
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
-import docker
 import psycopg2
 import psycopg2.extras
 import requests
@@ -19,6 +16,7 @@ DB_PASS = os.environ.get("DB_PASS") or os.environ.get("POSTGRES_PASSWORD")
 CH_HOST = os.environ.get("CH_HOST", "agency-clickhouse")
 CH_USER = os.environ.get("CH_USER", "agency")
 CH_PASS = os.environ.get("CH_PASS") or os.environ.get("CLICKHOUSE_PASSWORD")
+HOST_STATE_PATH = os.environ.get("AGENCY_HOST_STATE", "/agency-state/host-health.json")
 
 
 def db():
@@ -56,83 +54,32 @@ def ch_trace(event):
         pass
 
 
-def _container_stat(c):
-    cname = c.name
+def _host_state():
     try:
-        cstats = c.stats(stream=False)
-    except Exception:
-        return None
-    cpu_delta = cstats.get("cpu_stats", {}).get("cpu_usage", {}).get("total_usage", 0) - \
-                cstats.get("precpu_stats", {}).get("cpu_usage", {}).get("total_usage", 0)
-    sys_delta = cstats.get("cpu_stats", {}).get("system_cpu_usage", 0) - \
-                cstats.get("precpu_stats", {}).get("system_cpu_usage", 0)
-    num_cpus = len(cstats.get("cpu_stats", {}).get("cpu_usage", {}).get("percpu_usage", [])) or 1
-    cpu_perc = 0.0
-    if sys_delta > 0 and cpu_delta > 0:
-        cpu_perc = round((cpu_delta / sys_delta) * num_cpus * 100.0, 2)
-    mem_stats = cstats.get("memory_stats", {})
-    mem_used = mem_stats.get("usage", 0)
-    mem_limit = mem_stats.get("limit", 0)
-    mem_perc = round((mem_used / mem_limit) * 100.0, 2) if mem_limit > 0 else 0.0
-    pids = cstats.get("pids_stats", {}).get("current", 0)
-    return {
-        "Container": cname,
-        "CPUPerc": f"{cpu_perc}%",
-        "MemUsage": f"{mem_used / (1024 * 1024):.0f}MiB / {mem_limit / (1024 * 1024):.0f}MiB",
-        "MemPerc": f"{mem_perc}%",
-        "PIDs": str(pids),
-    }
+        with open(HOST_STATE_PATH) as handle:
+            payload = json.load(handle)
+        generated = datetime.fromisoformat(payload["generated_at"])
+        if (datetime.now(timezone.utc) - generated).total_seconds() > 1800:
+            payload["stale"] = True
+        return payload
+    except (OSError, ValueError, TypeError, KeyError):
+        return {"stale": True}
 
 def get_docker_stats():
-    dc = docker.DockerClient(base_url="unix:///var/run/docker.sock")
-    stats = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-        for result in pool.map(_container_stat, dc.containers.list()):
-            if result:
-                stats.append(result)
-    return {s["Container"]: s for s in stats}
+    stats = _host_state().get("containers") or []
+    return {s["Container"]: s for s in stats if isinstance(s, dict) and s.get("Container")}
 
 
 def _host_memory():
-    try:
-        with open("/proc/meminfo") as f:
-            info = {}
-            for line in f:
-                parts = line.split()
-                if parts[0] == "MemTotal:":
-                    info["total_kb"] = int(parts[1])
-                elif parts[0] == "MemAvailable:":
-                    info["avail_kb"] = int(parts[1])
-        if "total_kb" in info and "avail_kb" in info:
-            total_mb = info["total_kb"] / 1024
-            avail_mb = info["avail_kb"] / 1024
-            used_mb = total_mb - avail_mb
-            return {"total_gb": round(total_mb / 1024, 1), "used_gb": round(used_mb / 1024, 1),
-                    "avail_gb": round(avail_mb / 1024, 1), "used_perc": f"{round(used_mb / total_mb * 100)}%",
-                    "total_mb": round(total_mb), "used_mb": round(used_mb), "avail_mb": round(avail_mb)}
-    except Exception:
-        pass
-    return {}
+    return _host_state().get("memory") or {}
 
 
 def _host_cpu():
-    try:
-        with open("/proc/loadavg") as f:
-            parts = f.read().strip().split()
-            return {"load_1m": parts[0], "load_5m": parts[1], "load_15m": parts[2]}
-    except Exception:
-        return {}
+    return _host_state().get("cpu") or {}
 
 
 def _host_disk():
-    try:
-        out = subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=5)
-        parts = out.stdout.strip().split("\n")[-1].split()
-        if len(parts) >= 5:
-            return {"size": parts[1], "used": parts[2], "avail": parts[3], "use_perc": parts[4]}
-    except Exception:
-        pass
-    return {}
+    return _host_state().get("disk") or {}
 
 
 def _parse_mem_val(val):
@@ -598,12 +545,7 @@ def get_overview():
     finally:
         conn.close()
 
-    try:
-        running_containers = {
-            c.name for c in docker.DockerClient(base_url="unix:///var/run/docker.sock").containers.list()
-        }
-    except Exception:
-        running_containers = set()
+    running_containers = set(get_docker_stats())
     service_incidents = [s for s in expected_services if s["container"] not in running_containers]
 
     cols, rows = ch_query(
@@ -959,12 +901,7 @@ def get_system_data():
     finally:
         conn.close()
 
-    networks = []
-    try:
-        dc = docker.DockerClient(base_url="unix:///var/run/docker.sock")
-        networks = sorted([n.name for n in dc.networks.list() if n.name.startswith("net-") and n.name != "net-control"])
-    except Exception:
-        pass
+    networks = _host_state().get("networks") or []
 
     def registry(filename, key):
         for base in ("/agency-config", "/home/agency/core/agency-os/config"):
@@ -979,10 +916,7 @@ def get_system_data():
 
     capabilities = registry("capabilities.json", "capabilities")
     tools = registry("core-tools.json", "tools")
-    try:
-        running = {c.name for c in docker.DockerClient(base_url="unix:///var/run/docker.sock").containers.list()}
-    except Exception:
-        running = set()
+    running = set(get_docker_stats())
     for tool in tools:
         check = tool.get("health") or ""
         if check.startswith("container:"):

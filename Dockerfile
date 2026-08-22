@@ -5,8 +5,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+RUN addgroup --system dashboard && adduser --system --ingroup dashboard dashboard
 
-EXPOSE 80
+COPY --chown=dashboard:dashboard . .
+
+USER dashboard
+
+EXPOSE 8000
 
 CMD ["python3", "app.py"]
