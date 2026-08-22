@@ -551,8 +551,8 @@ def get_overview():
     cols, rows = ch_query(
         "SELECT ts, project, actor, action, detail, gate, decision, ok "
         "FROM default.events "
-        "WHERE ok = 0 OR gate NOT IN ('', 'green') "
-        "   OR action NOT IN ('health_check','job_completed','memory_sweep') "
+        "WHERE ok = 0 OR gate NOT IN ('', 'green') OR decision = 'resolved' "
+        "   OR action NOT IN ('health_check','job_completed','memory_sweep','security_scan','docker_prune') "
         "ORDER BY ts DESC LIMIT 12 "
         "FORMAT TabSeparatedWithNames"
     )

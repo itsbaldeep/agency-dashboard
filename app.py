@@ -1300,7 +1300,9 @@ def health_data():
     data = models.get_health()
     cols, rows = models.ch_query(
         "SELECT ts, project, actor, action, detail, gate, decision, ok "
-        "FROM default.events ORDER BY ts DESC LIMIT 20 FORMAT TabSeparatedWithNames"
+        "FROM default.events WHERE ok=0 OR gate NOT IN ('','green') OR decision='resolved' "
+        "OR action NOT IN ('health_check','job_completed','memory_sweep','security_scan','docker_prune') "
+        "ORDER BY ts DESC LIMIT 20 FORMAT TabSeparatedWithNames"
     )
     events = [dict(zip(cols, row)) for row in rows] if cols else []
     return render_template("fragments/health.html", health=data, events=events)
