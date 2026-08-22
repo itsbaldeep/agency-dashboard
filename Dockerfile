@@ -10,6 +10,7 @@ RUN addgroup --system dashboard && adduser --system --ingroup dashboard dashboar
 COPY --chown=dashboard:dashboard . .
 
 USER dashboard
+ENV HOME=/tmp
 
 EXPOSE 8000
 
