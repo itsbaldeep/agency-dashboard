@@ -5,6 +5,11 @@
   <div class="progress-track thin" style="flex:1;max-width:260px"><div class="progress-fill" style="width:{{ t.progress or 3 }}%"></div></div>
   <span class="dim"><strong>{{ t.progress or 0 }}%</strong> &mdash; {{ t.progress_text or 'working…' }}</span>
 </span>
+{% elif t.status == 'needs_input' %}
+<div class="summary-status">
+  <span class="badge needs_input">needs input</span>
+  <span class="dim" style="color:var(--amber)">{{ t.error or 'operator input required' }}</span>
+</div>
 {% elif t.status in ('failed', 'error') %}
 <div class="summary-status">
   <span class="badge {{ t.status }}">{{ t.status }}</span>

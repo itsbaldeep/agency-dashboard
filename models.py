@@ -672,23 +672,41 @@ def get_approvals(pending_only=True):
         conn.close()
 
 
-def run_approval(approval_id, decision):
+def run_approval(approval_id, decision, note=""):
     if decision not in ("approve", "reject"):
         return False, "decision must be 'approve' or 'reject'"
-    status = "approved" if decision == "approve" else "rejected"
     conn = db()
     try:
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE approvals SET status=%s, decided_at=now() WHERE id=%s AND status='pending'",
-            (status, approval_id),
-        )
-        if cur.rowcount == 0:
+        cur.execute("SELECT id,type::text,status::text,task_id FROM approvals WHERE id=%s FOR UPDATE", (approval_id,))
+        approval = cur.fetchone()
+        if not approval or approval["status"] != "pending":
             return False, "approval not found or already decided"
+        if decision == "reject":
+            cur.execute(
+                "UPDATE approvals SET status='rejected', decided_at=now(), note=%s WHERE id=%s",
+                (note[:1000], approval_id),
+            )
+            conn.commit()
+            return True, ""
+
+        task_id = None
+        if approval["type"] not in ("dns", "deploy", "apex-deploy"):
+            cur.execute(
+                "INSERT INTO tasks (type,status,params,triggered_by) "
+                "VALUES ('execute_approval','queued',%s,'dashboard-approval') RETURNING id",
+                (json.dumps({"approval_id": approval_id, "operator_input": note[:2000]}),),
+            )
+            task_id = cur.fetchone()["id"]
+        cur.execute(
+            "UPDATE approvals SET status='approved', decided_at=now(), note=%s, task_id=%s WHERE id=%s",
+            (note[:1000], task_id, approval_id),
+        )
         conn.commit()
-        ch_trace({"project": "system", "actor": "agent", "action": f"approval_{status}",
-                  "detail": f"Approval {approval_id} → {status}", "gate": "green", "decision": "proceed", "ok": 1})
-        return True, ""
+        ch_trace({"project": "system", "actor": "agent", "action": "approval_approved",
+                  "detail": f"Approval {approval_id} approved; task={task_id or 'mechanical'}",
+                  "gate": "green", "decision": "proceed", "ok": 1})
+        return True, str(task_id or "")
     except Exception as e:
         return False, str(e)
     finally:

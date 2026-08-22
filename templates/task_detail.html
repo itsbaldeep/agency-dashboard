@@ -11,6 +11,18 @@
   </div>
 </div>
 
+{% if workflow_links.suggestion or workflow_links.content or workflow_links.approval or workflow_links.children %}
+<div class="card">
+  <div class="card-title mb-2">Linked workflow</div>
+  <div class="gap-2">
+    {% if workflow_links.suggestion %}<a class="btn btn-sm" href="/engagements/brand/{{ workflow_links.suggestion.brand_id }}/report">Suggestion #{{ workflow_links.suggestion.id }} · {{ workflow_links.suggestion.status }}</a>{% endif %}
+    {% if workflow_links.content %}<a class="btn btn-sm" href="/content/{{ workflow_links.content.id }}/preview">Content #{{ workflow_links.content.id }} · {{ workflow_links.content.status }}</a>{% endif %}
+    {% if workflow_links.approval %}<a class="btn btn-sm" href="/operations">Approval #{{ workflow_links.approval.id }} · {{ workflow_links.approval.status }}</a>{% endif %}
+    {% for child in workflow_links.children %}<a class="btn btn-sm" href="/tasks/{{ child.id }}">Child task #{{ child.id }} · {{ child.status }}</a>{% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-header">
     <span class="card-title">Summary</span>
@@ -52,6 +64,32 @@
 <div class="card">
   <div class="card-title mb-2">Error</div>
   <pre class="code">{{ t.error }}</pre>
+</div>
+{% endif %}
+
+{% if t.status == 'needs_input' %}
+<div class="card">
+  <div class="card-title mb-2">Operator input required</div>
+  {% if can_resume %}
+  <p class="subtle">Supply only the named configuration or context. Store credentials in the engagement-owned <code>.env</code>; enter the variable name here, never the secret value.</p>
+  <form id="resumeForm" onsubmit="return resumeTask(event)">
+    {% if t.type == 'execute_suggestion' %}
+    <label>Implementation instructions<textarea name="instructions" rows="3">{{ t.params_obj.get('instructions','') }}</textarea></label>
+    <label>Target keyword<input name="target_keyword" value="{{ t.params_obj.get('target_keyword','') }}"></label>
+    <label>Competitor URLs<textarea name="competitor_urls" rows="4">{% set urls=t.params_obj.get('competitor_urls','') %}{{ urls|join('\n') if urls is not string else urls }}</textarea></label>
+    {% else %}
+    {% set destination=t.params_obj.get('destination',{}) if t.params_obj.get('destination',{}) is mapping else {} %}
+    <label>Destination adapter<select name="destination_type"><option value="">Select adapter</option><option value="wordpress" {% if destination.get('type') == 'wordpress' %}selected{% endif %}>WordPress</option></select></label>
+    <label>Base URL<input name="base_url" value="{{ destination.get('base_url','') }}" placeholder="https://example.com"></label>
+    <label>Username<input name="username" value="{{ destination.get('username','') }}" autocomplete="off"></label>
+    <label>Credential reference<input name="credential_ref" value="{{ destination.get('credential_ref','') }}" placeholder="WORDPRESS_APPLICATION_PASSWORD" autocomplete="off"></label>
+    <label>Operator notes<textarea name="instructions" rows="3">{{ t.params_obj.get('operator_input',t.params_obj.get('instructions','')) }}</textarea></label>
+    {% endif %}
+    <div class="gap-2 mt-2"><button type="submit" class="btn btn-primary btn-sm">Resume this task</button><span id="resumeStatus" class="dim"></span></div>
+  </form>
+  {% else %}
+  <p class="subtle">This task may have external side effects and cannot be resumed in place. Inspect its result and use <b>Re-run</b> to create a separately tracked retry.</p>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -111,6 +149,19 @@ async function rerunTask(e) {
     if (d.ok) { s.textContent = 'queued as task #'+d.task_id+' — redirecting…'; location.href = '/tasks/'+d.task_id; }
     else { s.textContent = 'Error: ' + d.error; }
   } catch(err) { s.textContent = 'Error: ' + err.message; }
+  return false;
+}
+async function resumeTask(e) {
+  e.preventDefault();
+  var s=document.getElementById('resumeStatus');
+  s.textContent='queuing…';
+  try {
+    var payload=Object.fromEntries(new FormData(e.target).entries());
+    var r=await fetch('/api/tasks/{{ t.id }}/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    var d=await r.json();
+    if(d.ok){s.textContent='queued';location.reload();return false;}
+    s.textContent='Error: '+(d.error||'unable to resume');
+  } catch(err) { s.textContent='Error: '+err.message; }
   return false;
 }
 </script>

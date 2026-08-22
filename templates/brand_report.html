@@ -546,10 +546,31 @@
 
 {% endif %}
 
+<dialog id="reportSuggestionDialog" class="workflow-dialog">
+  <form method="dialog" id="reportSuggestionForm">
+    <h3>Approve and execute suggestion</h3>
+    <p class="subtle">This creates a linked task rather than changing only the label. Missing access becomes an explicit <code>needs_input</code> state.</p>
+    <label>Implementation instructions<textarea name="instructions" rows="3"></textarea></label>
+    <label>Target keyword<input name="target_keyword" placeholder="Required for content suggestions"></label>
+    <label>Competitor URLs<textarea name="competitor_urls" rows="4" placeholder="One public URL per line"></textarea></label>
+    <div class="subtle mt-1">Use credential references only; never paste secret values.</div>
+    <div class="gap-2 mt-2"><button class="btn" value="cancel">Cancel</button><button class="btn btn-green" type="button" onclick="submitReportSuggestion()">Create execution task</button></div>
+    <div id="reportSuggestionError" class="subtle mt-1" style="color:var(--red)"></div>
+  </form>
+</dialog>
+
 <script>
+var pendingReportSuggestionId=null;
 async function rptApprove(sid) {
-  await fetch('/api/suggestions/'+sid+'/approve', {method:'POST'});
-  var el = document.getElementById('rpt-sug-'+sid); if(el) el.style.opacity='0.5';
+  pendingReportSuggestionId=sid;
+  document.getElementById('reportSuggestionDialog').showModal();
+}
+async function submitReportSuggestion(){
+  var payload=Object.fromEntries(new FormData(document.getElementById('reportSuggestionForm')).entries());
+  var r=await fetch('/api/suggestions/'+pendingReportSuggestionId+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  var d=await r.json();
+  if(d.ok){window.location.href='/tasks/'+d.task_id;return;}
+  document.getElementById('reportSuggestionError').textContent=d.error||'Unable to create execution task';
 }
 async function rptReject(sid) {
   await fetch('/api/suggestions/'+sid+'/reject', {method:'POST'});
