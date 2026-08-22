@@ -50,4 +50,27 @@
     </table>
     </div>
   </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Recent Attributed Usage</span></div>
+    <div class="table-wrap">
+    <table>
+      <tr><th>When</th><th>Run</th><th>State</th><th>Actual Model</th><th>Tokens</th><th>API Cost</th></tr>
+      {% for u in spend.recent %}
+      <tr>
+        <td class="mono">{{ u.ts.strftime('%Y-%m-%d %H:%M') if u.ts else '—' }}</td>
+        <td>
+          {% if u.task_id %}<a href="/tasks/{{ u.task_id }}">Task #{{ u.task_id }}</a> · {{ u.task_type }}
+          {% elif u.job_run_id %}Job run #{{ u.job_run_id }} · {{ u.job_name or 'scheduled job' }}
+          {% else %}<span class="muted">Historical / unattributed</span>{% endif %}
+        </td>
+        <td>{{ u.task_status or u.job_status or '—' }}</td>
+        <td><strong>{{ u.model or 'unknown' }}</strong></td>
+        <td class="mono">{{ (u.tokens_in or 0) + (u.tokens_out or 0) }}</td>
+        <td class="mono">${{ "%.6f"|format(u.cost_usd or 0) }}</td>
+      </tr>
+      {% else %}<tr><td colspan="6"><p class="empty">No usage recorded</p></td></tr>{% endfor %}
+    </table>
+    </div>
+  </div>
 </div>

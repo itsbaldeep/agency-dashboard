@@ -779,7 +779,20 @@ def get_spend():
             ORDER BY total_cost DESC NULLS LAST, (SUM(tokens_in)+SUM(tokens_out)) DESC
         """)
         by_model = cur.fetchall()
-        return {"by_project": by_project, "by_model": by_model, "totals": totals}
+        cur.execute("""
+            SELECT u.id,u.ts,u.task_id,t.type AS task_type,t.status AS task_status,
+                   u.job_run_id,bj.name AS job_name,jr.status AS job_status,
+                   u.model,u.tokens_in,u.tokens_out,u.cost_usd
+            FROM token_usage u
+            LEFT JOIN tasks t ON t.id=u.task_id
+            LEFT JOIN job_runs jr ON jr.id=u.job_run_id
+            LEFT JOIN background_jobs bj ON bj.id=jr.job_id
+            ORDER BY u.ts DESC
+            LIMIT 30
+        """)
+        recent = cur.fetchall()
+        return {"by_project": by_project, "by_model": by_model, "totals": totals,
+                "recent": recent}
     finally:
         conn.close()
 
