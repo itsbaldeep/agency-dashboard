@@ -1,12 +1,9 @@
-import concurrent.futures
 import json
 import os
 import re
-import subprocess
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
-import docker
 import psycopg2
 import psycopg2.extras
 import requests
@@ -19,6 +16,7 @@ DB_PASS = os.environ.get("DB_PASS") or os.environ.get("POSTGRES_PASSWORD")
 CH_HOST = os.environ.get("CH_HOST", "agency-clickhouse")
 CH_USER = os.environ.get("CH_USER", "agency")
 CH_PASS = os.environ.get("CH_PASS") or os.environ.get("CLICKHOUSE_PASSWORD")
+HOST_STATE_PATH = os.environ.get("AGENCY_HOST_STATE", "/agency-state/host-health.json")
 
 
 def db():
@@ -56,84 +54,36 @@ def ch_trace(event):
         pass
 
 
-def _container_stat(c):
-    cname = c.name
+def _host_state():
     try:
-        cstats = c.stats(stream=False)
-    except Exception:
-        return None
-    cpu_delta = cstats.get("cpu_stats", {}).get("cpu_usage", {}).get("total_usage", 0) - \
-                cstats.get("precpu_stats", {}).get("cpu_usage", {}).get("total_usage", 0)
-    sys_delta = cstats.get("cpu_stats", {}).get("system_cpu_usage", 0) - \
-                cstats.get("precpu_stats", {}).get("system_cpu_usage", 0)
-    num_cpus = len(cstats.get("cpu_stats", {}).get("cpu_usage", {}).get("percpu_usage", [])) or 1
-    cpu_perc = 0.0
-    if sys_delta > 0 and cpu_delta > 0:
-        cpu_perc = round((cpu_delta / sys_delta) * num_cpus * 100.0, 2)
-    mem_stats = cstats.get("memory_stats", {})
-    mem_used = mem_stats.get("usage", 0)
-    mem_limit = mem_stats.get("limit", 0)
-    mem_perc = round((mem_used / mem_limit) * 100.0, 2) if mem_limit > 0 else 0.0
-    pids = cstats.get("pids_stats", {}).get("current", 0)
-    return {
-        "Container": cname,
-        "CPUPerc": f"{cpu_perc}%",
-        "MemUsage": f"{mem_used / (1024 * 1024):.0f}MiB / {mem_limit / (1024 * 1024):.0f}MiB",
-        "MemPerc": f"{mem_perc}%",
-        "PIDs": str(pids),
-    }
-
+        with open(HOST_STATE_PATH) as handle:
+            payload = json.load(handle)
+        generated = datetime.fromisoformat(payload["generated_at"])
+        if (datetime.now(timezone.utc) - generated).total_seconds() > 1800:
+            payload["stale"] = True
+        return payload
+    except (OSError, ValueError, TypeError, KeyError):
+        return {"stale": True}
 
 def get_docker_stats():
-    dc = docker.DockerClient(base_url="unix:///var/run/docker.sock")
-    stats = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-        for result in pool.map(_container_stat, dc.containers.list()):
-            if result:
-                stats.append(result)
-    return {s["Container"]: s for s in stats}
+    stats = _host_state().get("containers") or []
+    return {s["Container"]: s for s in stats if isinstance(s, dict) and s.get("Container")}
 
 
 def _host_memory():
-    try:
-        with open("/proc/meminfo") as f:
-            info = {}
-            for line in f:
-                parts = line.split()
-                if parts[0] == "MemTotal:":
-                    info["total_kb"] = int(parts[1])
-                elif parts[0] == "MemAvailable:":
-                    info["avail_kb"] = int(parts[1])
-        if "total_kb" in info and "avail_kb" in info:
-            total_mb = info["total_kb"] / 1024
-            avail_mb = info["avail_kb"] / 1024
-            used_mb = total_mb - avail_mb
-            return {"total_gb": round(total_mb / 1024, 1), "used_gb": round(used_mb / 1024, 1),
-                    "avail_gb": round(avail_mb / 1024, 1), "used_perc": f"{round(used_mb / total_mb * 100)}%",
-                    "total_mb": round(total_mb), "used_mb": round(used_mb), "avail_mb": round(avail_mb)}
-    except Exception:
-        pass
-    return {}
+    return _host_state().get("memory") or {}
 
 
 def _host_cpu():
-    try:
-        with open("/proc/loadavg") as f:
-            parts = f.read().strip().split()
-            return {"load_1m": parts[0], "load_5m": parts[1], "load_15m": parts[2]}
-    except Exception:
-        return {}
+    return _host_state().get("cpu") or {}
 
 
 def _host_disk():
-    try:
-        out = subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=5)
-        parts = out.stdout.strip().split("\n")[-1].split()
-        if len(parts) >= 5:
-            return {"size": parts[1], "used": parts[2], "avail": parts[3], "use_perc": parts[4]}
-    except Exception:
-        pass
-    return {}
+    return _host_state().get("disk") or {}
+
+
+def _host_maintenance():
+    return _host_state().get("maintenance") or {}
 
 
 def _parse_mem_val(val):
@@ -172,7 +122,8 @@ def _caddy_sites():
 def _engagement_row(ref_type, ref_id, name, onboarding, client_status, has_code,
                     brand_id, brand_name, brand_slug, access_tier,
                     project_id, project_name, project_state, repo_url,
-                    created_at, intake_params, agent_allowed=False):
+                    created_at, intake_params, agent_allowed=False,
+                    classification=None, lifecycle=None, recovery_ref=None):
     return {
         "ref_type": ref_type, "ref_id": ref_id,
         "name": name or project_name or brand_name or "Unknown",
@@ -184,6 +135,9 @@ def _engagement_row(ref_type, ref_id, name, onboarding, client_status, has_code,
         "project_id": project_id, "project_name": project_name,
         "project_state": project_state, "repo_url": repo_url,
         "agent_allowed": agent_allowed,
+        "classification": classification,
+        "lifecycle": lifecycle,
+        "recovery_ref": recovery_ref,
         "created_at": created_at,
         "intake_params": intake_params,
         "last_audit_date": None, "audit_count": 0,
@@ -225,13 +179,14 @@ def get_engagements():
                 created_at=c["created_at"], intake_params=c["intake_params"],
             ))
 
-        # Orphan projects (no client, no linked brand) — exclude infra/archived
+        # Project engagements not represented by a client/brand. Core is shown
+        # here only when it is also a marketing engagement (Deployden).
         cur.execute("""
             SELECT p.* FROM projects p
             WHERE p.id NOT IN (SELECT project_id FROM clients WHERE project_id IS NOT NULL)
               AND p.id NOT IN (SELECT project_id FROM brands WHERE project_id IS NOT NULL)
-              AND p.state <> 'archived'
-              AND lower(p.name) NOT IN ('agency-os','agency-dashboard','aetheria','hearth','streamwise')
+              AND p.lifecycle <> 'hard_parked'
+              AND (p.classification='engagement' OR lower(p.name)='deployden')
             ORDER BY p.created_at DESC
         """)
         for p in cur.fetchall():
@@ -243,6 +198,8 @@ def get_engagements():
                 project_id=p["id"], project_name=p["name"],
                 project_state=p["state"], repo_url=p["repo_url"],
                 created_at=p["created_at"], intake_params=None,
+                classification=p.get("classification"), lifecycle=p.get("lifecycle"),
+                recovery_ref=p.get("recovery_ref"),
             ))
 
         # Orphan brands (no client)
@@ -275,16 +232,21 @@ def get_engagements():
                 r = cur2.fetchone()
                 if r: e["brand_name"] = r["name"]
             if e["project_id"]:
-                cur2.execute("SELECT name, state, repo_url, agent_allowed FROM projects WHERE id=%s", (e["project_id"],))
+                cur2.execute("SELECT name,state,repo_url,agent_allowed,classification,lifecycle,recovery_ref "
+                             "FROM projects WHERE id=%s", (e["project_id"],))
                 r = cur2.fetchone()
                 if r:
                     e["project_name"] = r["name"]
                     e["project_state"] = r["state"]
                     e["repo_url"] = r["repo_url"]
                     e["agent_allowed"] = bool(r["agent_allowed"])
+                    e["classification"] = r.get("classification")
+                    e["lifecycle"] = r.get("lifecycle")
+                    e["recovery_ref"] = r.get("recovery_ref")
     finally:
         conn2.close()
 
+    engs = [e for e in engs if e.get("lifecycle") != "hard_parked"]
     _enrich_engagements(engs)
     engs.sort(key=lambda e: e["last_activity"] or e["created_at"] or datetime.min, reverse=True)
     return engs
@@ -431,9 +393,12 @@ def get_engagement_detail(ref_type, ref_id):
 
         elif ref_type == "brand":
             cur.execute("""
-                SELECT b.*, bp.enabled_stages, bp.schedule_cron
+                SELECT b.*, bp.enabled_stages, bp.schedule_cron,
+                       p.name AS project_name,p.state AS project_state,p.repo_url,
+                       p.local_path,p.classification,p.lifecycle,p.recovery_ref
                 FROM brands b
                 LEFT JOIN brand_pipelines bp ON bp.brand_id = b.id
+                LEFT JOIN projects p ON p.id=b.project_id
                 WHERE b.id = %s
             """, (ref_id,))
             row = cur.fetchone()
@@ -443,12 +408,12 @@ def get_engagement_detail(ref_type, ref_id):
             e["ref_type"] = "brand"
             e["ref_id"] = ref_id
             e["onboarding"] = "marketing_only"
-            e["has_code"] = False
+            e["has_code"] = bool(e.get("local_path"))
             e["client_name"] = row["name"]
             e["client_status"] = "active"
             e["intake_params"] = None
-            e["project_id"] = None
-            e["project_name"] = None
+            e["project_id"] = row.get("project_id")
+            e["project_name"] = row.get("project_name")
             e["brand_id"] = e["id"]
             e["brand_name"] = e["name"]
 
@@ -528,22 +493,71 @@ def get_overview():
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) AS c FROM clients")
         client_count = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM projects")
+        cur.execute("SELECT COUNT(*) AS c FROM projects WHERE lifecycle <> 'hard_parked'")
         project_count = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(*) AS c FROM projects WHERE lifecycle = 'soft_parked'")
+        parked_count = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM brands")
         brand_count = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM tasks WHERE status='queued'")
         queued_tasks = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM tasks WHERE status='running'")
         running_tasks = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(*) AS c FROM tasks WHERE status='needs_input'")
+        needs_input_tasks = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM approvals WHERE status='pending'")
         pending_approvals = cur.fetchone()["c"]
+        cur.execute("""
+            SELECT id,type,status,left(COALESCE(error,''),180) AS error,created_at
+            FROM tasks
+            WHERE status IN ('failed','orphaned')
+              AND created_at >= now()-interval '24 hours'
+            ORDER BY created_at DESC LIMIT 8
+        """)
+        task_incidents = cur.fetchall()
+        cur.execute("""
+            SELECT t.id,t.type,t.created_at,
+                   CASE WHEN t.type='execute_approval' THEN 'approval' ELSE 'workflow' END AS source
+            FROM tasks t
+            WHERE t.status='needs_input'
+            ORDER BY t.created_at LIMIT 8
+        """)
+        input_queue = cur.fetchall()
+        cur.execute("""
+            SELECT j.name,r.id,r.status,left(COALESCE(r.detail,''),180) AS detail,r.started_at
+            FROM job_runs r JOIN background_jobs j ON j.id=r.job_id
+            WHERE r.status='failed' AND r.started_at >= now()-interval '24 hours'
+            ORDER BY r.started_at DESC LIMIT 8
+        """)
+        job_incidents = cur.fetchall()
+        cur.execute("""
+            SELECT count(*) FILTER (WHERE status='done') AS done,
+                   count(*) FILTER (WHERE status='failed') AS failed
+            FROM tasks
+            WHERE type IN ('content_research','content_outline','content_compose',
+                           'generate_draft','publish_content')
+              AND created_at >= now()-interval '7 days'
+        """)
+        content_reliability = cur.fetchone()
+        cur.execute("""
+            SELECT s.container,p.name AS project_name,s.name AS service_name
+            FROM services s JOIN projects p ON p.id=s.project_id
+            WHERE p.lifecycle='active' AND s.status='running' AND s.container IS NOT NULL
+            ORDER BY p.name,s.name
+        """)
+        expected_services = cur.fetchall()
     finally:
         conn.close()
 
+    running_containers = set(get_docker_stats())
+    service_incidents = [s for s in expected_services if s["container"] not in running_containers]
+
     cols, rows = ch_query(
         "SELECT ts, project, actor, action, detail, gate, decision, ok "
-        "FROM default.events ORDER BY ts DESC LIMIT 20 "
+        "FROM default.events "
+        "WHERE ok = 0 OR gate NOT IN ('', 'green') OR decision = 'resolved' "
+        "   OR action NOT IN ('health_check','job_completed','memory_sweep','security_scan','docker_prune') "
+        "ORDER BY ts DESC LIMIT 12 "
         "FORMAT TabSeparatedWithNames"
     )
     events = [dict(zip(cols, row)) for row in rows] if cols else []
@@ -551,8 +565,13 @@ def get_overview():
     return {
         "memory": mem, "cpu": cpu, "disk": disk,
         "client_count": client_count, "project_count": project_count,
+        "parked_count": parked_count,
         "brand_count": brand_count, "queued_tasks": queued_tasks,
-        "running_tasks": running_tasks, "pending_approvals": pending_approvals,
+        "running_tasks": running_tasks, "needs_input_tasks": needs_input_tasks,
+        "pending_approvals": pending_approvals,
+        "task_incidents": task_incidents, "job_incidents": job_incidents,
+        "input_queue": input_queue, "service_incidents": service_incidents,
+        "content_reliability": content_reliability,
         "events": events,
     }
 
@@ -672,23 +691,39 @@ def get_approvals(pending_only=True):
         conn.close()
 
 
-def run_approval(approval_id, decision):
+def run_approval(approval_id, decision, note=""):
     if decision not in ("approve", "reject"):
         return False, "decision must be 'approve' or 'reject'"
-    status = "approved" if decision == "approve" else "rejected"
     conn = db()
     try:
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE approvals SET status=%s, decided_at=now() WHERE id=%s AND status='pending'",
-            (status, approval_id),
-        )
-        if cur.rowcount == 0:
+        cur.execute("SELECT id,type::text,status::text,task_id FROM approvals WHERE id=%s FOR UPDATE", (approval_id,))
+        approval = cur.fetchone()
+        if not approval or approval["status"] != "pending":
             return False, "approval not found or already decided"
+        if decision == "reject":
+            cur.execute(
+                "UPDATE approvals SET status='rejected', decided_at=now(), note=%s WHERE id=%s",
+                (note[:1000], approval_id),
+            )
+            conn.commit()
+            return True, ""
+
+        cur.execute(
+            "INSERT INTO tasks (type,status,params,triggered_by) "
+            "VALUES ('execute_approval','queued',%s,'dashboard-approval') RETURNING id",
+            (json.dumps({"approval_id": approval_id, "operator_input": note[:2000]}),),
+        )
+        task_id = cur.fetchone()["id"]
+        cur.execute(
+            "UPDATE approvals SET status='approved', decided_at=now(), note=%s, task_id=%s WHERE id=%s",
+            (note[:1000], task_id, approval_id),
+        )
         conn.commit()
-        ch_trace({"project": "system", "actor": "agent", "action": f"approval_{status}",
-                  "detail": f"Approval {approval_id} → {status}", "gate": "green", "decision": "proceed", "ok": 1})
-        return True, ""
+        ch_trace({"project": "system", "actor": "agent", "action": "approval_approved",
+                  "detail": f"Approval {approval_id} approved; task={task_id or 'mechanical'}",
+                  "gate": "green", "decision": "proceed", "ok": 1})
+        return True, str(task_id or "")
     except Exception as e:
         return False, str(e)
     finally:
@@ -721,37 +756,47 @@ def get_spend():
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT COALESCE(prj.name, 'system') AS project_name,
-                   COUNT(*) AS total_tasks,
-                   SUM(t.cost) AS total_cost
-            FROM tasks t
-            LEFT JOIN LATERAL (
-                SELECT p.name,
-                       p.id = CASE WHEN t.params->>'project_id' ~ '^[0-9]+$'
-                                   THEN (t.params->>'project_id')::int END AS bypid,
-                       lower(p.repo_name) = lower(t.params->>'repo')       AS byrepo
-                FROM projects p
-                WHERE p.id = CASE WHEN t.params->>'project_id' ~ '^[0-9]+$'
-                                  THEN (t.params->>'project_id')::int END
-                   OR lower(p.repo_name) = lower(t.params->>'repo')
-                   OR lower(p.name)      = lower(t.params->>'repo')
-                ORDER BY bypid DESC NULLS LAST, byrepo DESC NULLS LAST, p.id
-                LIMIT 1
-            ) prj ON true
-            WHERE t.cost IS NOT NULL
+            SELECT COALESCE(p.name, 'system / unassigned') AS project_name,
+                   COUNT(*) AS recorded_runs,
+                   SUM(u.tokens_in + u.tokens_out) AS total_tokens,
+                   SUM(u.cost_usd) AS total_cost
+            FROM token_usage u
+            LEFT JOIN projects p ON p.id=u.project_id
             GROUP BY project_name
-            ORDER BY total_cost DESC NULLS LAST
+            ORDER BY total_cost DESC NULLS LAST, total_tokens DESC
         """)
         by_project = cur.fetchall()
         cur.execute("""
-            SELECT SUM(prompt_tokens) AS total_tokens_in,
-                   SUM(completion_tokens) AS total_tokens_out,
-                   SUM(cost) AS total_cost,
-                   COUNT(*) AS total_calls
-            FROM tasks WHERE cost IS NOT NULL
+            SELECT COALESCE(SUM(tokens_in),0) AS total_tokens_in,
+                   COALESCE(SUM(tokens_out),0) AS total_tokens_out,
+                   COALESCE(SUM(cost_usd),0) AS total_cost,
+                   COUNT(*) AS recorded_runs
+            FROM token_usage
         """)
         totals = cur.fetchone()
-        return {"by_project": by_project, "totals": totals}
+        cur.execute("""
+            SELECT model,COUNT(*) AS recorded_runs,
+                   SUM(tokens_in) AS tokens_in,SUM(tokens_out) AS tokens_out,
+                   SUM(cost_usd) AS total_cost
+            FROM token_usage
+            GROUP BY model
+            ORDER BY total_cost DESC NULLS LAST, (SUM(tokens_in)+SUM(tokens_out)) DESC
+        """)
+        by_model = cur.fetchall()
+        cur.execute("""
+            SELECT u.id,u.ts,u.task_id,t.type AS task_type,t.status AS task_status,
+                   u.job_run_id,bj.name AS job_name,jr.status AS job_status,
+                   u.model,u.tokens_in,u.tokens_out,u.cost_usd
+            FROM token_usage u
+            LEFT JOIN tasks t ON t.id=u.task_id
+            LEFT JOIN job_runs jr ON jr.id=u.job_run_id
+            LEFT JOIN background_jobs bj ON bj.id=jr.job_id
+            ORDER BY u.ts DESC
+            LIMIT 30
+        """)
+        recent = cur.fetchall()
+        return {"by_project": by_project, "by_model": by_model, "totals": totals,
+                "recent": recent}
     finally:
         conn.close()
 
@@ -806,7 +851,7 @@ def get_resources():
 
     return {
         "projects": sorted(project_map.values(), key=lambda p: p["cpu_sum"], reverse=True),
-        "memory": mem, "disk": disk,
+        "memory": mem, "disk": disk, "maintenance": _host_maintenance(),
         "total_container_mem_mb": round(total_mb, 0),
         "container_count": len(stats),
     }
@@ -820,12 +865,15 @@ def get_activity(ref_type, ref_id, name):
     tasks = []
     try:
         cur = conn.cursor()
+        key = {"brand": "brand_id", "project": "project_id", "client": "client_id"}.get(ref_type)
         cur.execute("""
             SELECT id, type, status, params, error, created_at, started_at, finished_at
             FROM tasks
-            WHERE params::text ILIKE %s
+            WHERE (%s IS NOT NULL AND params->>%s = %s)
+               OR params->>'domain' = %s
+               OR params->>'repo' = %s
             ORDER BY created_at DESC LIMIT 20
-        """, (f'%{name}%',))
+        """, (key, key, str(ref_id), name, name))
         tasks = cur.fetchall()
     except Exception:
         tasks = []
@@ -833,12 +881,14 @@ def get_activity(ref_type, ref_id, name):
         conn.close()
 
     events = []
-    safe = name.replace("'", "\\'")
+    identity = f"{ref_type}:{ref_id}"
+    safe_identity = identity.replace("'", "\\'")
+    safe_name = name.replace("'", "\\'")
     try:
         cols, rows = ch_query(
             "SELECT ts, actor, action, detail, gate, decision, ok "
             "FROM default.events "
-            f"WHERE project = '{safe}' "
+            f"WHERE project IN ('{safe_identity}','{safe_name}') "
             "ORDER BY ts DESC LIMIT 20 "
             "FORMAT TabSeparatedWithNames"
         )
@@ -859,395 +909,49 @@ def get_system_data():
         jobs = cur.fetchall()
         cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name")
         tables = [r["table_name"] for r in cur.fetchall()]
+        cur.execute("""
+            SELECT DISTINCT ON (s.name) s.name,h.healthy,h.ts
+            FROM services s LEFT JOIN health_checks h ON h.service_id=s.id
+            ORDER BY s.name,h.ts DESC NULLS LAST
+        """)
+        service_health = {r["name"]: r for r in cur.fetchall()}
     finally:
         conn.close()
 
-    networks = []
-    try:
-        dc = docker.DockerClient(base_url="unix:///var/run/docker.sock")
-        networks = sorted([n.name for n in dc.networks.list() if n.name.startswith("net-") and n.name != "net-control"])
-    except Exception:
-        pass
+    networks = _host_state().get("networks") or []
 
-    skills = []
-    skills_dir = "/home/agency/projects/.skills"
-    if os.path.isdir(skills_dir):
-        skills = sorted([f.replace(".md", "") for f in os.listdir(skills_dir) if f.endswith(".md")])
+    def registry(filename, key):
+        for base in ("/agency-config", "/home/agency/core/agency-os/config"):
+            path = os.path.join(base, filename)
+            try:
+                with open(path) as handle:
+                    value = json.load(handle).get(key, [])
+                return value if isinstance(value, list) else []
+            except (OSError, ValueError, TypeError):
+                continue
+        return []
+
+    capabilities = registry("capabilities.json", "capabilities")
+    tools = registry("core-tools.json", "tools")
+    running = set(get_docker_stats())
+    for tool in tools:
+        check = tool.get("health") or ""
+        if check.startswith("container:"):
+            tool["observed"] = "healthy" if check.split(":", 1)[1] in running else "down"
+        elif check.startswith("service:"):
+            health = service_health.get(check.split(":", 1)[1])
+            if not health or health.get("healthy") is None:
+                tool["observed"] = "unobserved"
+            else:
+                checked = health.get("ts")
+                stale = checked and (datetime.now(timezone.utc) - checked).total_seconds() > 7200
+                tool["observed"] = "stale" if stale else ("healthy" if health["healthy"] else "down")
+        elif check.startswith("credential:"):
+            tool["observed"] = "configured" if os.environ.get(check.split(":", 1)[1]) else "missing"
+        else:
+            tool["observed"] = "operator" if check == "operator-session" else "not_configured"
 
     return {
-        "jobs": jobs, "tables": tables, "networks": networks, "skills": skills,
-        "task_types": {
-            "run_brand_audit": "Full black-box brand recon: crawl -> classify -> competitors -> visibility -> suggestions",
-            "generate_draft": "Generate blog/article from suggestion + brand context with compliance check",
-            "propose_fix": "Git branch + OpenCode headless + GitHub PR (human review required)",
-            "client_import_repo": "Clone public repo, analyze, generate AGENTS.md, create project",
-            "client_new_project": "Scaffold new project from brief on GitHub + push",
-            "design_page": "Two-stage: generate concept specs, then render chosen spec to HTML/CSS/JS",
-            "search_jobs": "Discover job listings matching campaign criteria",
-            "generate_resume": "Tailor resume for a specific job listing",
-            "generate_cover_letter": "Draft personalized cover letter for a job",
-            "find_contacts": "Discover HR/hiring managers at target companies",
-            "generate_linkedin_note": "Generate LinkedIn connection note",
-            "send_application_email": "Send application email via Gmail API",
-            "run_job_campaign": "Full job campaign orchestration (search -> tailor -> draft -> contact -> email)",
-            "aetheria_work_block": "Aetheria autonomous dev loop: one headless opencode session that does ONE checklist item, tests, screenshots, commits, pushes",
-            "competitor_scan": "Sitemap scan for competitor pages (deterministic, zero LLM)",
-        },
-        "adminer_port": os.environ.get("ADMINER_PORT", ""),
+        "jobs": jobs, "tables": tables, "networks": networks,
+        "capabilities": capabilities, "tools": tools,
     }
-
-
-# ── Job Search Queries ─────────────────────────────────────────
-
-def get_job_campaigns():
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT jc.*,
-                   (SELECT COUNT(*) FROM job_listings WHERE campaign_id=jc.id) AS listing_count,
-                   (SELECT COUNT(*) FROM job_applications WHERE campaign_id=jc.id) AS application_count,
-                   (SELECT COUNT(*) FROM job_run_history WHERE campaign_id=jc.id) AS run_count,
-                   (SELECT MAX(started_at) FROM job_run_history WHERE campaign_id=jc.id) AS last_run
-            FROM job_campaigns jc
-            ORDER BY jc.created_at DESC
-        """)
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_campaign(campaign_id):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM job_campaigns WHERE id=%s", (campaign_id,))
-        return cur.fetchone()
-    finally:
-        conn.close()
-
-
-def get_job_listings(campaign_id, status=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if status:
-            cur.execute("SELECT * FROM job_listings WHERE campaign_id=%s AND status=%s ORDER BY created_at DESC", (campaign_id, status))
-        else:
-            cur.execute("SELECT * FROM job_listings WHERE campaign_id=%s ORDER BY created_at DESC", (campaign_id,))
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_contacts(listing_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if listing_id:
-            cur.execute("SELECT * FROM job_contacts WHERE listing_id=%s ORDER BY confidence DESC", (listing_id,))
-        else:
-            cur.execute("SELECT jc.*, jl.title AS job_title, jl.company FROM job_contacts jc JOIN job_listings jl ON jl.id=jc.listing_id ORDER BY jc.created_at DESC")
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_email_threads(campaign_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if campaign_id:
-            cur.execute("""
-                SELECT et.*, jc.name AS contact_name, jl.title AS job_title, jl.company
-                FROM email_threads et
-                JOIN job_contacts jc ON jc.id=et.contact_id
-                JOIN job_listings jl ON jl.id=et.listing_id
-                WHERE et.campaign_id=%s ORDER BY et.created_at DESC
-            """, (campaign_id,))
-        else:
-            cur.execute("""
-                SELECT et.*, jc.name AS contact_name, jl.title AS job_title, jl.company
-                FROM email_threads et
-                JOIN job_contacts jc ON jc.id=et.contact_id
-                JOIN job_listings jl ON jl.id=et.listing_id
-                ORDER BY et.created_at DESC LIMIT 50
-            """)
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_applications(campaign_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if campaign_id:
-            cur.execute("""
-                SELECT ja.*, jl.title, jl.company, jl.location, jl.url,
-                       rv.tailored_resume IS NOT NULL AS has_resume,
-                       cl.content IS NOT NULL AS has_cover_letter
-                FROM job_applications ja
-                JOIN job_listings jl ON jl.id=ja.listing_id
-                LEFT JOIN resume_versions rv ON rv.id=ja.resume_id
-                LEFT JOIN cover_letters cl ON cl.id=ja.cover_letter_id
-                WHERE ja.campaign_id=%s
-                ORDER BY ja.created_at DESC
-            """, (campaign_id,))
-        else:
-            cur.execute("""
-                SELECT ja.*, jl.title, jl.company, jl.location, jl.url,
-                       rv.tailored_resume IS NOT NULL AS has_resume,
-                       cl.content IS NOT NULL AS has_cover_letter
-                FROM job_applications ja
-                JOIN job_listings jl ON jl.id=ja.listing_id
-                LEFT JOIN resume_versions rv ON rv.id=ja.resume_id
-                LEFT JOIN cover_letters cl ON cl.id=ja.cover_letter_id
-                ORDER BY ja.created_at DESC LIMIT 100
-            """)
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_run_history(campaign_id):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM job_run_history WHERE campaign_id=%s ORDER BY started_at DESC LIMIT 20", (campaign_id,))
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_resume_versions(listing_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if listing_id:
-            cur.execute("SELECT * FROM resume_versions WHERE listing_id=%s ORDER BY created_at DESC", (listing_id,))
-        else:
-            cur.execute("SELECT rv.*, jl.title, jl.company FROM resume_versions rv JOIN job_listings jl ON jl.id=rv.listing_id ORDER BY rv.created_at DESC LIMIT 20")
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_cover_letters(listing_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if listing_id:
-            cur.execute("SELECT * FROM cover_letters WHERE listing_id=%s ORDER BY created_at DESC", (listing_id,))
-        else:
-            cur.execute("SELECT cl.*, jl.title, jl.company FROM cover_letters cl JOIN job_listings jl ON jl.id=cl.listing_id ORDER BY cl.created_at DESC LIMIT 20")
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_stats():
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) AS c FROM job_campaigns")
-        campaigns = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM job_listings")
-        listings = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM job_applications")
-        applications = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM job_applications WHERE status='email_sent' OR status='applied' OR status='interviewing'")
-        active = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM email_threads WHERE status='sent'")
-        emails_sent = cur.fetchone()["c"]
-        return {"campaigns": campaigns, "listings": listings, "applications": applications, "active": active, "emails_sent": emails_sent}
-    finally:
-        conn.close()
-
-
-# ── Aetheria game-project status ─────────────────────────────────
-
-AETHERIA_REPO_PATH = "/home/agency/projects/aetheria"
-
-
-def get_game_status(repo_path=AETHERIA_REPO_PATH):
-    """Parse STATE.md for the current milestone, checklist progress, next action,
-    and blockers. Returns {} if the repo/STATE.md isn't found (non-game projects
-    simply don't render the card). Also reads CHANGELOG for the last few lines."""
-    import os as _os
-    state_path = _os.path.join(repo_path, "docs", "STATE.md")
-    if not _os.path.isfile(state_path):
-        return {}
-    try:
-        with open(state_path) as f:
-            state = f.read()
-    except Exception:
-        return {}
-
-    # Current milestone (from the "## Current milestone" section header)
-    milestone = ""
-    m = re.search(r"## Current milestone\s*\n\*\*(.+?)\*\*", state)
-    if m:
-        milestone = m.group(1).strip()
-
-    # Next action
-    next_action = ""
-    m = re.search(r"## Next action\n(.+)", state, re.DOTALL)
-    if m:
-        next_action = m.group(1).split("\n\n")[0].strip()
-
-    # Blockers
-    blockers = ""
-    m = re.search(r"## Blockers\n(.+?)(?=\n## |\Z)", state, re.DOTALL)
-    if m:
-        blockers = m.group(1).strip()
-
-    # Checklist progress: count [x] vs [ ] across the whole file
-    done = len(re.findall(r"- \[x\]", state))
-    total = done + len(re.findall(r"- \[ \]", state))
-
-    # Last changelog entries
-    changelog_lines = []
-    cl_path = _os.path.join(repo_path, "docs", "CHANGELOG.md")
-    if _os.path.isfile(cl_path):
-        try:
-            with open(cl_path) as f:
-                cl_lines = [l.strip() for l in f if l.strip().startswith("- 2026")]
-            changelog_lines = cl_lines[:5]
-        except Exception:
-            pass
-
-    # Gallery URL + download URL (known from the project's subdomains).
-    # Include the screens token (from env) so the dashboard link works in one
-    # click — the gallery exchanges ?t for an HttpOnly cookie on first visit.
-    _screens_token = _os.environ.get("AETHERIA_SCREENS_TOKEN", "")
-    if _screens_token:
-        gallery_url = f"https://admin.aetheria.apps.deployden.tech/screens?t={_screens_token}"
-    else:
-        gallery_url = "https://admin.aetheria.apps.deployden.tech/screens"
-    download_url = "https://aetheria.apps.deployden.tech/download"
-
-    # Raw GitHub links for STATE.md + CHANGELOG
-    repo_name = _os.path.basename(repo_path)
-    state_url = f"https://github.com/itsbaldeep/{repo_name}/blob/main/docs/STATE.md"
-    changelog_url = f"https://github.com/itsbaldeep/{repo_name}/blob/main/docs/CHANGELOG.md"
-
-    return {
-        "milestone": milestone,
-        "next_action": next_action,
-        "blockers": blockers,
-        "checklist_done": done,
-        "checklist_total": total,
-        "changelog_lines": changelog_lines,
-        "gallery_url": gallery_url,
-        "download_url": download_url,
-        "state_url": state_url,
-        "changelog_url": changelog_url,
-        "repo_path": repo_path,
-    }
-
-
-def get_game_work_blocks(limit=15):
-    """Recent aetheria_work_block tasks with progress + cost for the dashboard."""
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT id, status, progress, progress_text, cost,
-                   prompt_tokens, completion_tokens, error, result_ref,
-                   created_at, started_at, finished_at, triggered_by, params
-            FROM tasks WHERE type = 'aetheria_work_block'
-            ORDER BY id DESC LIMIT %s
-        """, (limit,))
-        tasks = cur.fetchall()
-        for t in tasks:
-            if isinstance(t.get("params"), str):
-                try:
-                    t["params"] = json.loads(t["params"])
-                except (json.JSONDecodeError, TypeError):
-                    t["params"] = {}
-        return tasks
-    finally:
-        conn.close()
-
-
-def get_game_pending_approvals():
-    """Pending approvals for the aetheria project (screens, gates, human_todo)."""
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT a.*, COALESCE(p.name, 'system') AS project_name
-            FROM approvals a
-            LEFT JOIN projects p ON p.id = a.project_id
-            WHERE a.status = 'pending'
-              AND (a.type::text LIKE 'aetheria_%' OR a.payload::text ILIKE '%aetheria%')
-            ORDER BY a.requested_at DESC
-        """)
-        approvals = cur.fetchall()
-        for a in approvals:
-            if isinstance(a.get("payload"), str):
-                try:
-                    a["payload"] = json.loads(a["payload"])
-                except (json.JSONDecodeError, TypeError):
-                    a["payload"] = {}
-        return approvals
-    finally:
-        conn.close()
-
-
-def get_loop_status():
-    """Job 12 state + next run estimate + loop health for the dashboard."""
-    conn = db()
-    try:
-        cur = conn.cursor()
-        # Job 12 config + last run
-        cur.execute("SELECT id, name, schedule, enabled, script_path FROM background_jobs WHERE id=12")
-        job = cur.fetchone()
-        if not job:
-            return {"enabled": False, "schedule": "—", "next_run": "—"}
-        # Last few job runs
-        cur.execute("""
-            SELECT id, status, started_at, finished_at, duration_sec, detail
-            FROM job_runs WHERE job_id=12 ORDER BY started_at DESC LIMIT 5
-        """)
-        runs = cur.fetchall()
-        # Is a work block currently queued or running?
-        cur.execute("""
-            SELECT count(*) AS c FROM tasks
-            WHERE type='aetheria_work_block' AND status IN ('queued','running')
-        """)
-        active = cur.fetchone()["c"]
-        # Last completed work block
-        cur.execute("""
-            SELECT id, status, finished_at, progress_text, cost, error
-            FROM tasks WHERE type='aetheria_work_block'
-            ORDER BY id DESC LIMIT 1
-        """)
-        last_block = cur.fetchone()
-        # Today's spend on aetheria work blocks
-        cur.execute("""
-            SELECT COALESCE(sum(cost), 0) AS spent,
-                   count(*) AS blocks
-            FROM tasks WHERE type='aetheria_work_block'
-              AND cost IS NOT NULL
-              AND finished_at >= date_trunc('day', now())
-        """)
-        spend = cur.fetchone()
-        # .manual present?
-        import os as _os
-        manual_present = _os.path.isfile("/home/agency/projects/aetheria/.manual")
-        return {
-            "enabled": job["enabled"],
-            "schedule": job["schedule"],
-            "script_path": job["script_path"],
-            "runs": runs,
-            "active_blocks": active,
-            "last_block": last_block,
-            "daily_spent": float(spend["spent"] or 0),
-            "daily_blocks": spend["blocks"],
-            "daily_budget": float(_os.environ.get("AETHERIA_DAILY_BUDGET_USD", "3.00")),
-            "manual_present": manual_present,
-        }
-    finally:
-        conn.close()

@@ -12,14 +12,20 @@
     {% if ci.body or ci.content_blocks %}
     <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
     {% endif %}
-    {% if ci.status in ('draft', 'outline') %}
-    <button class="btn btn-sm btn-green" onclick="approveContent({{ ci.id }})">Approve</button>
+    {% if has_image_slots and ci.status in ('draft', 'outline') %}
+    <button class="btn btn-sm" onclick="sourceImages({{ ci.id }})">Source images</button>
+    {% endif %}
+    {% if ci.status in ('draft', 'needs_publish_input') %}
+    <button class="btn btn-sm btn-green" onclick="openPublish({{ ci.id }})">Approve &amp; Publish</button>
     {% endif %}
     {% if ci.status == 'draft' %}
     <button class="btn btn-sm" onclick="regenerateContent({{ ci.id }})">Regenerate</button>
     {% endif %}
     {% if ci.status == 'outline' %}
     <a href="/content/new?outline={{ ci.id }}" class="btn btn-sm btn-primary">Compose Full Draft</a>
+    {% endif %}
+    {% if ci.publish_task_id %}
+    <a href="/tasks/{{ ci.publish_task_id }}" class="btn btn-sm">Publication task #{{ ci.publish_task_id }}</a>
     {% endif %}
   </div>
 </div>
@@ -28,15 +34,49 @@
   {{ body_html|safe }}
 </div>
 
+<dialog id="publishDialog" class="workflow-dialog">
+  <form method="dialog" id="publishForm">
+    <h3>Approve content for publication</h3>
+    <p class="subtle">This creates a tracked publication task. Never paste a secret value; reference the variable name in the engagement-owned <code>.env</code>.</p>
+    <label>Destination adapter
+      <select name="destination_type"><option value="">Use engagement configuration</option><option value="wordpress">WordPress</option></select>
+    </label>
+    <label>Base URL <input name="base_url" placeholder="https://example.com"></label>
+    <label>Username <input name="username" autocomplete="off"></label>
+    <label>Credential reference <input name="credential_ref" placeholder="WORDPRESS_APPLICATION_PASSWORD" autocomplete="off"></label>
+    <label>Publication notes <textarea name="instructions" rows="3" placeholder="Optional slug, category, timing, or client instruction"></textarea></label>
+    <div class="gap-2 mt-2">
+      <button class="btn" value="cancel">Cancel</button>
+      <button class="btn btn-green" type="button" onclick="approveContent()">Create publication task</button>
+    </div>
+    <div id="publishError" class="subtle mt-1" style="color:var(--red)"></div>
+  </form>
+</dialog>
+
 <script>
-async function approveContent(id) {
-  await fetch('/content/'+id+'/approve', {method:'POST'});
-  location.reload();
+var publishContentId = null;
+function openPublish(id) {
+  publishContentId = id;
+  document.getElementById('publishDialog').showModal();
+}
+async function approveContent() {
+  var form = document.getElementById('publishForm');
+  var payload = Object.fromEntries(new FormData(form).entries());
+  var r = await fetch('/content/'+publishContentId+'/approve', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  var d = await r.json();
+  if (d.ok) { window.location.href='/tasks/'+d.task_id; return; }
+  document.getElementById('publishError').textContent=d.error||'Unable to create publication task';
 }
 async function regenerateContent(id) {
   if (!confirm('Regenerate this content? The current draft will be cleared.')) return;
   await fetch('/content/'+id+'/regenerate', {method:'POST'});
   location.reload();
+}
+async function sourceImages(id) {
+  var r = await fetch('/content/'+id+'/images', {method:'POST'});
+  var d = await r.json();
+  if (d.ok) { location.reload(); return; }
+  alert(d.error || 'Unable to source images');
 }
 </script>
 {% endblock %}

@@ -2,32 +2,74 @@
   <div class="stats">
     <div class="stat-card">
       <div class="stat-value" style="color:var(--accent)">${{ "%.6f"|format(spend.totals.total_cost or 0) }}</div>
-      <div class="stat-label">Total Cost</div>
+      <div class="stat-label">Recorded API Cost</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value" style="color:var(--text-bright)">{{ spend.totals.total_calls or 0 }}</div>
-      <div class="stat-label">Total Calls</div>
+      <div class="stat-value" style="color:var(--text-bright)">{{ spend.totals.recorded_runs or 0 }}</div>
+      <div class="stat-label">Recorded Runs</div>
     </div>
     <div class="stat-card">
       <div class="stat-value" style="color:var(--green)">{{ (spend.totals.total_tokens_in or 0) + (spend.totals.total_tokens_out or 0) }}</div>
-      <div class="stat-label">Total Tokens</div>
+      <div class="stat-label">Recorded Task Tokens</div>
     </div>
   </div>
+
+  <p class="muted" style="margin:0 0 16px;">Scope: Agency OS worker and agent-harness runs recorded by this VPS. ChatGPT/Codex subscription-wide billing is not observable here and is not included.</p>
 
   <div class="card">
     <div class="card-header"><span class="card-title">By Project</span></div>
     <div class="table-wrap">
     <table>
-      <tr><th>Project</th><th>Tasks</th><th>Cost</th></tr>
+      <tr><th>Project</th><th>Recorded Runs</th><th>Tokens</th><th>API Cost</th></tr>
       {% for p in spend.by_project %}
       <tr>
         <td><strong>{{ p.project_name }}</strong></td>
-        <td>{{ p.total_tasks }}</td>
+        <td>{{ p.recorded_runs }}</td>
+        <td class="mono">{{ p.total_tokens or 0 }}</td>
         <td class="mono">${{ "%.6f"|format(p.total_cost or 0) }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="3"><p class="empty">No spend data</p></td></tr>
+      <tr><td colspan="4"><p class="empty">No spend data</p></td></tr>
       {% endfor %}
+    </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">By Actual Model</span></div>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Model</th><th>Recorded Runs</th><th>Input</th><th>Output</th><th>API Cost</th></tr>
+      {% for m in spend.by_model %}
+      <tr>
+        <td><strong>{{ m.model }}</strong></td><td>{{ m.recorded_runs }}</td>
+        <td class="mono">{{ m.tokens_in or 0 }}</td><td class="mono">{{ m.tokens_out or 0 }}</td>
+        <td class="mono">${{ "%.6f"|format(m.total_cost or 0) }}</td>
+      </tr>
+      {% else %}<tr><td colspan="5"><p class="empty">No model usage recorded</p></td></tr>{% endfor %}
+    </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Recent Attributed Usage</span></div>
+    <div class="table-wrap">
+    <table>
+      <tr><th>When</th><th>Run</th><th>State</th><th>Actual Model</th><th>Tokens</th><th>API Cost</th></tr>
+      {% for u in spend.recent %}
+      <tr>
+        <td class="mono">{{ u.ts.strftime('%Y-%m-%d %H:%M') if u.ts else '—' }}</td>
+        <td>
+          {% if u.task_id %}<a href="/tasks/{{ u.task_id }}">Task #{{ u.task_id }}</a> · {{ u.task_type }}
+          {% elif u.job_run_id %}Job run #{{ u.job_run_id }} · {{ u.job_name or 'scheduled job' }}
+          {% else %}<span class="muted">Historical / unattributed</span>{% endif %}
+        </td>
+        <td>{{ u.task_status or u.job_status or '—' }}</td>
+        <td><strong>{{ u.model or 'unknown' }}</strong></td>
+        <td class="mono">{{ (u.tokens_in or 0) + (u.tokens_out or 0) }}</td>
+        <td class="mono">${{ "%.6f"|format(u.cost_usd or 0) }}</td>
+      </tr>
+      {% else %}<tr><td colspan="6"><p class="empty">No usage recorded</p></td></tr>{% endfor %}
     </table>
     </div>
   </div>

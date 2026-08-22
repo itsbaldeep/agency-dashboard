@@ -33,6 +33,7 @@
     <div class="mt-1 subtle">{{ a.payload.ask[:200] }}</div>
     {% endif %}
     {% endif %}
+    <textarea id="approval-note-{{ a.id }}" rows="2" placeholder="Optional execution input or rejection reason. Use credential references, never secret values."></textarea>
     <div class="mt-2 gap-2">
       <button class="btn btn-sm btn-green" onclick="actApproval({{ a.id }},'approve')">Approve</button>
       <button class="btn btn-sm btn-red" onclick="actApproval({{ a.id }},'reject')">Reject</button>
@@ -52,6 +53,7 @@
       <span class="subtle">{{ a.project_name }}</span>
     </div>
     <div class="mt-1 subtle">{{ a.requested_at.strftime('%b %d %H:%M') if a.requested_at else '' }}</div>
+    {% if a.task_id %}<div class="mt-1"><a href="/tasks/{{ a.task_id }}">Linked task #{{ a.task_id }}</a></div>{% endif %}
   </div>
   {% else %}
   <p class="empty">No history yet</p>
@@ -59,5 +61,12 @@
 </div>
 
 <script>
-async function actApproval(aid,dec){await fetch('/operations/approvals/'+aid+'/'+dec,{method:'POST'});setTimeout(function(){location.reload()},200)}
+async function actApproval(aid,dec){
+  var note=document.getElementById('approval-note-'+aid)?.value||'';
+  var r=await fetch('/operations/approvals/'+aid+'/'+dec,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:note})});
+  var d=await r.json();
+  if(d.ok&&d.task_id){window.location.href='/tasks/'+d.task_id;return;}
+  if(d.ok){location.reload();return;}
+  alert(d.error||'Approval failed');
+}
 </script>

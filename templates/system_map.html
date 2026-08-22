@@ -2,17 +2,39 @@
 {% block content %}
 <div class="page-header">
   <h1>System Map</h1>
-  <div class="sub">Architecture overview, live data</div>
+  <div class="sub">What exists, what is proven, and what is only planned</div>
 </div>
 
 <div class="card">
-  <div class="card-header"><span class="card-title">Task Types</span></div>
-  {% for name, desc in system.task_types.items() %}
-  <div class="suggestion-card">
-    <strong style="font-size:13px;color:var(--text-bright)">{{ name }}</strong>
-    <div class="subtle mt-1">{{ desc }}</div>
-  </div>
-  {% endfor %}
+  <div class="card-header"><span class="card-title">Capability Library ({{ system.capabilities|length }})</span></div>
+  <div class="table-wrap"><table>
+    <tr><th>Capability</th><th>Domain</th><th>Truth state</th><th>Evidence</th><th>Next proof</th></tr>
+    {% for item in system.capabilities %}
+    <tr>
+      <td><strong>{{ item.name }}</strong>{% if item.execution %}<div class="mono subtle">{{ item.execution }}</div>{% endif %}</td>
+      <td>{{ item.domain }}</td>
+      <td><span class="badge {% if item.status == 'available' %}badge-green{% elif item.status == 'limited' %}badge-amber{% else %}badge-dim{% endif %}">{{ item.status }}</span></td>
+      <td>{{ item.evidence }}</td>
+      <td>{{ item.next }}</td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="empty">Capability registry unavailable</td></tr>{% endfor %}
+  </table></div>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-title">Core Tool Registry ({{ system.tools|length }})</span></div>
+  <div class="table-wrap"><table>
+    <tr><th>Tool</th><th>Role</th><th>Declared</th><th>Observed</th><th>Credential references</th></tr>
+    {% for item in system.tools %}
+    <tr>
+      <td><strong>{{ item.name }}</strong></td>
+      <td>{{ item.role }}</td>
+      <td><span class="badge {% if item.status in ('active','active_bounded') %}badge-green{% elif item.status == 'configured_unverified' %}badge-amber{% else %}badge-dim{% endif %}">{{ item.status }}</span></td>
+      <td><span class="badge {% if item.observed == 'healthy' %}badge-green{% elif item.observed in ('configured','operator') %}badge-amber{% elif item.observed == 'down' %}badge-red{% else %}badge-dim{% endif %}">{{ item.observed }}</span></td>
+      <td>{% for ref in item.credential_refs %}<span class="badge badge-dim mono">{{ ref }}</span>{% else %}<span class="subtle">none</span>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
 </div>
 
 <div class="card">
@@ -52,24 +74,4 @@
   </div>
 </div>
 
-<div class="card">
-  <div class="card-header"><span class="card-title">Skills ({{ system.skills|length }})</span></div>
-  <div class="gap-2">
-  {% for s in system.skills %}
-    <span class="badge badge-purple">{{ s }}</span>
-  {% else %}
-    <p class="empty">No skills installed</p>
-  {% endfor %}
-  </div>
-</div>
-
-{% if system.adminer_port %}
-<div class="card">
-  <div class="card-header"><span class="card-title">Consoles</span></div>
-  <div class="gap-2">
-    <a href="/consoles/pg" target="_blank" class="btn btn-sm">Adminer (Postgres)</a>
-    <a href="/consoles/ch" target="_blank" class="btn btn-sm">ClickHouse Play</a>
-  </div>
-</div>
-{% endif %}
 {% endblock %}

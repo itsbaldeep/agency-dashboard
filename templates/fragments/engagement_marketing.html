@@ -85,6 +85,9 @@
         <span class="badge {{ s.status }}">{{ s.status }}</span>
       </div>
       {% if s.rationale %}<div class="subtle mt-1">{{ s.rationale }}</div>{% endif %}
+      {% if s.execution_task_id %}
+      <div class="mt-1"><a class="btn btn-xs" href="/tasks/{{ s.execution_task_id }}">Execution task #{{ s.execution_task_id }} &rarr;</a></div>
+      {% endif %}
       {% if s.status == 'pending' %}
       <div class="mt-2 gap-2">
         <button class="btn btn-sm btn-green" onclick="approveSug({{ s.id }})">Approve</button>
@@ -129,7 +132,21 @@
   {% endif %}
 </div>
 
+<dialog id="suggestionApprovalDialog" class="workflow-dialog">
+  <form method="dialog" id="suggestionApprovalForm">
+    <h3>Approve and execute suggestion</h3>
+    <p class="subtle">Approval creates a linked task. Add context now; if a required input is still missing, the task will stop in <code>needs_input</code> and tell you exactly what it needs.</p>
+    <label>Implementation instructions<textarea name="instructions" rows="3" placeholder="Optional constraints or access context"></textarea></label>
+    <label>Target keyword<input name="target_keyword" placeholder="Required for content suggestions"></label>
+    <label>Competitor URLs<textarea name="competitor_urls" rows="4" placeholder="One public URL per line for content research"></textarea></label>
+    <div class="subtle mt-1">Never paste credentials here. Put engagement secrets in its own <code>.env</code> and reference them by name in the relevant workflow.</div>
+    <div class="gap-2 mt-2"><button class="btn" value="cancel">Cancel</button><button class="btn btn-green" type="button" onclick="submitSuggestionApproval()">Create execution task</button></div>
+    <div id="suggestionApprovalError" class="subtle mt-1" style="color:var(--red)"></div>
+  </form>
+</dialog>
+
 <script>
+var pendingSuggestionId=null;
 async function runAudit(cid) {
   var domain = document.getElementById('audit-domain-'+cid).value.trim();
   if (!domain) return;
@@ -155,8 +172,15 @@ async function pollAudit(tid, el) {
   }
 }
 async function approveSug(sid) {
-  await fetch('/api/suggestions/'+sid+'/approve', {method:'POST'});
-  var el = document.getElementById('sug-'+sid); if(el) el.style.opacity='0.5';
+  pendingSuggestionId=sid;
+  document.getElementById('suggestionApprovalDialog').showModal();
+}
+async function submitSuggestionApproval(){
+  var payload=Object.fromEntries(new FormData(document.getElementById('suggestionApprovalForm')).entries());
+  var r=await fetch('/api/suggestions/'+pendingSuggestionId+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  var d=await r.json();
+  if(d.ok){window.location.href='/tasks/'+d.task_id;return;}
+  document.getElementById('suggestionApprovalError').textContent=d.error||'Unable to create execution task';
 }
 async function rejectSug(sid) {
   await fetch('/api/suggestions/'+sid+'/reject', {method:'POST'});

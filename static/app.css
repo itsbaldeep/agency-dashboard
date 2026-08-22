@@ -116,6 +116,9 @@ body{
 .badge.running{background:var(--accent-glow);color:var(--accent)}
 .badge.completed,.badge.approved,.badge.live,.badge.yes{background:var(--green-dim);color:var(--green)}
 .badge.failed,.badge.rejected,.badge.red{background:var(--red-dim);color:var(--red)}
+.badge.needs_input,.badge.needs_publish_input{background:rgba(245,166,35,0.14);color:var(--amber)}
+.badge.soft_parked{background:rgba(165,114,255,0.12);color:var(--purple)}
+.badge.hard_parked{background:var(--red-dim);color:var(--red)}
 .badge.pending{background:var(--amber-dim);color:var(--amber)}
 .badge.queued{background:rgba(165,114,255,0.12);color:var(--purple)}
 .badge.idea{background:var(--purple-dim);color:var(--purple)}
@@ -164,6 +167,16 @@ input,select,textarea{
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 select option{background:var(--surface);color:var(--text)}
 ::placeholder{color:var(--text-dim)}
+
+.workflow-dialog{
+  width:min(560px,calc(100vw - 28px));max-height:calc(100vh - 40px);overflow:auto;
+  background:var(--surface);color:var(--text);border:1px solid var(--border-hover);
+  border-radius:var(--radius);padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.55);
+}
+.workflow-dialog::backdrop{background:rgba(2,5,12,.72);backdrop-filter:blur(2px)}
+.workflow-dialog h3{color:var(--text-bright);margin-bottom:6px}
+.workflow-dialog label{display:block;margin-top:12px;color:var(--text-muted);font-size:11px}
+.workflow-dialog label input,.workflow-dialog label select,.workflow-dialog label textarea{margin-top:4px}
 
 /* ── Progress bars ──────────────────────────────────────── */
 .bar{background:rgba(28,38,64,0.6);border-radius:3px;height:6px;overflow:hidden;min-width:60px;display:inline-block;vertical-align:middle}

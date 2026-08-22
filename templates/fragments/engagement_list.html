@@ -4,7 +4,7 @@
      hx-select="#eng-list"
      hx-swap="outerHTML">
 {% for e in engagements %}
-{% set badge = 'Scaffolded' if e.project_id and e.project_state in ('scaffolded','building','preview','staged','live') else ('Code' if (e.has_code or e.project_id) else 'Black-box') %}
+{% set badge = 'Core' if e.classification == 'core' else ('Scaffolded' if e.project_id and e.project_state in ('scaffolded','building','preview','staged','live') else ('Code' if (e.has_code or e.project_id) else 'Black-box')) %}
 {% set last_audit = e.last_audit_date %}
 {% set audit_age_days = e.audit_age_days %}
 <div class="eng-card">
@@ -12,12 +12,14 @@
     <a href="/engagements/{{ e.ref_type }}/{{ e.ref_id }}" class="eng-card-name">{{ e.name }}</a>
     <span class="badge badge-{{ e.client_status }}">{{ e.client_status }}</span>
     <span class="badge badge-type-{{ badge|lower }}">{{ badge }}</span>
+    {% if e.lifecycle %}<span class="badge {{ e.lifecycle }}">{{ e.lifecycle.replace('_',' ') }}</span>{% endif %}
     {% if e.suggestion_pending > 0 %}<span class="badge badge-red" title="{{ e.suggestion_pending }} pending suggestion(s)">! {{ e.suggestion_pending }} action{{ '' if e.suggestion_pending == 1 else 's' }}</span>{% endif %}
   </div>
   <div class="eng-card-detail">
     {% if e.brand_name and e.brand_name != e.name %}<span>Brand: {{ e.brand_name }}</span>{% endif %}
     {% if e.brand_id and not e.project_id %}<span class="mono">{{ e.repo_url or e.brand_slug }}</span>{% endif %}
     {% if e.has_code and e.repo_url %}<span class="mono">{{ e.repo_url }}</span>{% endif %}
+    {% if e.lifecycle == 'soft_parked' %}<span>Services stopped; source and data retained</span>{% endif %}
     <span>Created {{ e.created_at.strftime('%b %d %Y') if e.created_at else '—' }}</span>
   </div>
   <div class="eng-card-meta mt-1">

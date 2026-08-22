@@ -368,7 +368,8 @@ def onboard_client():
             return
         cur.execute(
             "INSERT INTO brand_properties (brand_id, property_type, value, accessible) "
-            "VALUES (%s, %s, %s, true) ON CONFLICT DO NOTHING",
+            "VALUES (%s, %s, %s, true) ON CONFLICT (brand_id, property_type) DO UPDATE SET "
+            "value=EXCLUDED.value, accessible=EXCLUDED.accessible, created_at=now()",
             (bid, ptype, value))
 
     def _insert_competitors(cur, bid, raw):
@@ -415,7 +416,12 @@ def onboard_client():
             slug = re.sub(r'[^a-z0-9]+', '-', domain.split(".")[0].lower()).strip('-')
             cur.execute("INSERT INTO brands (name, slug, access_tier) VALUES (%s, %s, '0') ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name RETURNING id", (client_name, slug))
             brand_id = cur.fetchone()["id"]
-            cur.execute("INSERT INTO brand_properties (brand_id, property_type, value, accessible) VALUES (%s, 'domain', %s, true) ON CONFLICT DO NOTHING", (brand_id, domain))
+            cur.execute(
+                "INSERT INTO brand_properties (brand_id, property_type, value, accessible) VALUES "
+                "(%s, 'domain', %s, true) ON CONFLICT (brand_id, property_type) DO UPDATE SET "
+                "value=EXCLUDED.value, accessible=EXCLUDED.accessible, created_at=now()",
+                (brand_id, domain),
+            )
             _enrich_brand(cur, brand_id)
             intake = json.dumps({"domain": domain})
             cur.execute("INSERT INTO clients (name, type, status, brand_id, intake_params) VALUES (%s, 'black_box', 'queued', %s, %s) RETURNING id", (client_name, brand_id, intake))
@@ -1047,11 +1053,6 @@ def _render_content_body(ci, item_id, conn, cur):
         sys.path.insert(0, "/home/agency/agency-os/scripts")
         import importlib
         cp = importlib.import_module("content_pipeline")
-        blocks = cp.ensure_slot_images(item_id, blocks)
-        if any(b.get("type") == "image_slot" for b in blocks):
-            cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
-                        (json.dumps(blocks), item_id))
-            conn.commit()
         return banner + cp.render_pipeline_css() + \
             f"<div class='pipeline-article'>{cp.render_content_blocks(blocks, ci['title'])}</div>"
     structured = ci.get('structured')
@@ -1101,10 +1102,15 @@ def content_preview(item_id):
                 s = None
         if isinstance(s, dict):
             target_keyword = s.get("target_keyword", "") or ""
+        blocks = _parse_jsonb(ci.get("content_blocks"))
+        has_image_slots = isinstance(blocks, list) and any(
+            isinstance(block, dict) and block.get("type") == "image_slot" for block in blocks
+        )
         updated_fmt = fmt_ts(ci.get("updated_at") or ci.get("created_at"))
         return render_template("content_preview.html", active='content',
                                ci=ci, body_html=body_html,
                                target_keyword=target_keyword,
+                               has_image_slots=has_image_slots,
                                updated_fmt=updated_fmt)
     finally:
         conn.close()
@@ -1131,6 +1137,7 @@ def content_images(item_id):
         sys.path.insert(0, "/home/agency/agency-os/scripts")
         import importlib
         cp = importlib.import_module("content_pipeline")
+        blocks = cp.source_slot_images(item_id, blocks)
         blocks = cp.ensure_slot_images(item_id, blocks)
         cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
                     (json.dumps(blocks), item_id))
@@ -1162,14 +1169,58 @@ def content_download(ci_id):
 
 @app.route("/content/<int:ci_id>/approve", methods=["POST"])
 def content_approve(ci_id):
+    payload = request.get_json(silent=True) or request.form.to_dict() or {}
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE content_items SET status='approved', updated_at=now() WHERE id=%s", (ci_id,))
+        cur.execute("SELECT id,status,publish_task_id FROM content_items WHERE id=%s FOR UPDATE", (ci_id,))
+        item = cur.fetchone()
+        if not item:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        if item["status"] not in ("draft", "approved", "needs_publish_input", "publish_failed"):
+            return jsonify({"ok": False, "error": f"content is {item['status']}, not publishable"}), 409
+        destination = {
+            "type": (payload.get("destination_type") or "").strip(),
+            "base_url": (payload.get("base_url") or "").strip(),
+            "username": (payload.get("username") or "").strip(),
+            "credential_ref": (payload.get("credential_ref") or "").strip(),
+        }
+        if item.get("publish_task_id"):
+            cur.execute("SELECT id,type,status,params FROM tasks WHERE id=%s FOR UPDATE",
+                        (item["publish_task_id"],))
+            existing = cur.fetchone()
+            if existing and existing["type"] == "publish_content":
+                if existing["status"] in ("queued", "running"):
+                    conn.commit()
+                    return jsonify({"ok": True, "task_id": existing["id"], "existing": True})
+                if existing["status"] == "needs_input":
+                    params = _resume_workflow_params("publish_content", _parse_jsonb(existing.get("params")), payload)
+                    cur.execute(
+                        "UPDATE tasks SET params=%s,status='queued',error=NULL,result_ref=NULL,"
+                        "started_at=NULL,finished_at=NULL,progress=0,progress_text='resumed with publication input' "
+                        "WHERE id=%s",
+                        (json.dumps(params), existing["id"]),
+                    )
+                    cur.execute("UPDATE content_items SET status='publishing',updated_at=now() WHERE id=%s", (ci_id,))
+                    conn.commit()
+                    return jsonify({"ok": True, "task_id": existing["id"], "resumed": True})
+                if existing["status"] == "failed":
+                    return jsonify({"ok": False, "error": "publication may have partially completed; inspect the linked failed task before an explicit re-run"}), 409
+        params = json.dumps({"content_item_id": ci_id, "destination": destination,
+                             "instructions": (payload.get("instructions") or "")[:2000]})
+        cur.execute(
+            "INSERT INTO tasks (type,status,params,triggered_by) "
+            "VALUES ('publish_content','queued',%s,'dashboard-content-approval') RETURNING id",
+            (params,),
+        )
+        task_id = cur.fetchone()["id"]
+        cur.execute("UPDATE content_items SET status='publishing', publish_task_id=%s, updated_at=now() WHERE id=%s",
+                    (task_id, ci_id))
         conn.commit()
         models.ch_trace({"project": "system", "actor": "agent", "action": "content_approved",
-                         "detail": f"Content item {ci_id} approved", "gate": "green", "decision": "proceed", "ok": 1})
-        return jsonify({"ok": True})
+                         "detail": f"Content item {ci_id} approved for publication task {task_id}",
+                         "gate": "green", "decision": "proceed", "ok": 1})
+        return jsonify({"ok": True, "task_id": task_id})
     finally:
         conn.close()
 
@@ -1236,9 +1287,10 @@ def job_run(job_id):
 
 @app.route("/operations/approvals/<int:approval_id>/<decision>", methods=["POST"])
 def approval_act(approval_id, decision):
-    ok, msg = models.run_approval(approval_id, decision)
+    payload = request.get_json(silent=True) or request.form.to_dict() or {}
+    ok, msg = models.run_approval(approval_id, decision, payload.get("note", ""))
     if ok:
-        return "", 200
+        return jsonify({"ok": True, "task_id": int(msg) if msg.isdigit() else None})
     return jsonify({"ok": False, "error": msg}), 400
 
 
@@ -1254,7 +1306,9 @@ def health_data():
     data = models.get_health()
     cols, rows = models.ch_query(
         "SELECT ts, project, actor, action, detail, gate, decision, ok "
-        "FROM default.events ORDER BY ts DESC LIMIT 20 FORMAT TabSeparatedWithNames"
+        "FROM default.events WHERE ok=0 OR gate NOT IN ('','green') OR decision='resolved' "
+        "OR action NOT IN ('health_check','job_completed','memory_sweep','security_scan','docker_prune') "
+        "ORDER BY ts DESC LIMIT 20 FORMAT TabSeparatedWithNames"
     )
     events = [dict(zip(cols, row)) for row in rows] if cols else []
     return render_template("fragments/health.html", health=data, events=events)
@@ -1292,21 +1346,6 @@ def resources_data():
 def system_map():
     data = models.get_system_data()
     return render_template("system_map.html", system=data)
-
-
-# ── Consoles ─────────────────────────────────────────────────────
-
-@app.route("/consoles/pg")
-def console_pg():
-    ap = os.environ.get("ADMINER_PORT", "")
-    if ap:
-        return redirect(f"http://100.64.0.1:{ap}")
-    return "<p>Adminer not configured</p>"
-
-
-@app.route("/consoles/ch")
-def console_ch():
-    return redirect("http://100.64.0.1:8123/play")
 
 
 # ── Task status polling ─────────────────────────────────────────
@@ -1364,6 +1403,72 @@ def dev_task_progress(tid):
 
 
 NUMERIC_PARAMS = {"timeout", "rounds", "word_count_min", "word_count_max", "limit"}
+RESUMABLE_WORKFLOW_TASKS = {"execute_suggestion", "publish_content", "execute_approval"}
+
+
+def _resume_workflow_params(task_type, params, payload):
+    """Merge only known non-secret workflow inputs into an interrupted task."""
+    params = dict(params) if isinstance(params, dict) else {}
+    if task_type == "execute_suggestion":
+        for key, limit in (("instructions", 2000), ("target_keyword", 300),
+                           ("competitor_urls", 5000)):
+            if key in payload:
+                params[key] = str(payload.get(key) or "").strip()[:limit]
+        return params
+
+    destination = params.get("destination")
+    destination = dict(destination) if isinstance(destination, dict) else {}
+    for source, target, limit in (
+        ("destination_type", "type", 40),
+        ("base_url", "base_url", 500),
+        ("username", "username", 300),
+        ("credential_ref", "credential_ref", 200),
+    ):
+        if source in payload:
+            destination[target] = str(payload.get(source) or "").strip()[:limit]
+    params["destination"] = destination
+    note = str(payload.get("instructions") or payload.get("operator_input") or "").strip()[:2000]
+    if note:
+        params["operator_input" if task_type == "execute_approval" else "instructions"] = note
+    return params
+
+
+@app.route("/api/tasks/<int:tid>/resume", methods=["POST"])
+def task_resume(tid):
+    """Resume a linked workflow after supplying its explicitly requested inputs."""
+    payload = request.get_json(silent=True) or request.form.to_dict() or {}
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id,type,status,params FROM tasks WHERE id=%s FOR UPDATE", (tid,))
+        task = cur.fetchone()
+        if not task:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        if task["status"] != "needs_input":
+            return jsonify({"ok": False, "error": f"task is {task['status']}, not waiting for input"}), 409
+        if task["type"] not in RESUMABLE_WORKFLOW_TASKS:
+            return jsonify({"ok": False, "error": "this side-effect task must be inspected and re-run as a new task"}), 409
+        params = _parse_jsonb(task.get("params"))
+        params = _resume_workflow_params(task["type"], params, payload)
+        cur.execute(
+            "UPDATE tasks SET params=%s,status='queued',error=NULL,result_ref=NULL,"
+            "started_at=NULL,finished_at=NULL,progress=0,progress_text='resumed with operator input' "
+            "WHERE id=%s",
+            (json.dumps(params), tid),
+        )
+        if task["type"] == "execute_suggestion" and params.get("suggestion_id"):
+            cur.execute("UPDATE suggestions SET status='executing',updated_at=now() WHERE id=%s",
+                        (params["suggestion_id"],))
+        elif task["type"] == "publish_content" and params.get("content_item_id"):
+            cur.execute("UPDATE content_items SET status='publishing',updated_at=now() WHERE id=%s",
+                        (params["content_item_id"],))
+        conn.commit()
+        models.ch_trace({"project": "system", "actor": "human", "action": "workflow_task_resumed",
+                         "detail": f"Task {tid} resumed with named operator inputs", "gate": "green",
+                         "decision": "proceed", "ok": 1})
+        return jsonify({"ok": True, "task_id": tid})
+    finally:
+        conn.close()
 
 
 @app.route("/api/tasks/<int:tid>/rerun", methods=["POST"])
@@ -1439,7 +1544,8 @@ def brand_audit_create():
         cur.execute("INSERT INTO tasks (type, params) VALUES ('run_brand_audit', %s) RETURNING id", (params,))
         tid = cur.fetchone()["id"]
         conn.commit()
-        models.ch_trace({"project": "brands", "actor": "human", "action": "brand_audit_created",
+        event_project = f"brand:{int(brand_id)}" if brand_id else domain
+        models.ch_trace({"project": event_project, "actor": "human", "action": "brand_audit_created",
                          "detail": f"Brand audit task {tid} for {domain}", "gate": "green", "decision": "proceed", "ok": 1})
         return jsonify({"ok": True, "task_id": tid})
     except Exception as e:
@@ -1450,14 +1556,56 @@ def brand_audit_create():
 
 @app.route("/api/suggestions/<int:sid>/approve", methods=["POST"])
 def suggestion_approve(sid):
+    payload = request.get_json(silent=True) or request.form.to_dict() or {}
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE suggestions SET status='approved', updated_at=now() WHERE id=%s AND status='pending'", (sid,))
+        cur.execute("SELECT id,status,execution_task_id FROM suggestions WHERE id=%s FOR UPDATE", (sid,))
+        suggestion = cur.fetchone()
+        if not suggestion:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        if suggestion.get("execution_task_id"):
+            cur.execute("SELECT id,type,status,params FROM tasks WHERE id=%s FOR UPDATE",
+                        (suggestion["execution_task_id"],))
+            existing = cur.fetchone()
+            if existing and existing["type"] == "execute_suggestion":
+                if existing["status"] in ("queued", "running"):
+                    return jsonify({"ok": True, "task_id": existing["id"], "existing": True})
+                if existing["status"] == "needs_input":
+                    params = _resume_workflow_params("execute_suggestion", _parse_jsonb(existing.get("params")), payload)
+                    cur.execute(
+                        "UPDATE tasks SET params=%s,status='queued',error=NULL,result_ref=NULL,"
+                        "started_at=NULL,finished_at=NULL,progress=0,progress_text='resumed with suggestion input' "
+                        "WHERE id=%s",
+                        (json.dumps(params), existing["id"]),
+                    )
+                    cur.execute("UPDATE suggestions SET status='executing',updated_at=now() WHERE id=%s", (sid,))
+                    conn.commit()
+                    return jsonify({"ok": True, "task_id": existing["id"], "resumed": True})
+                if existing["status"] == "failed":
+                    return jsonify({"ok": False, "error": "inspect the linked failed task before an explicit re-run"}), 409
+            # A dangling link should not block repair; create a replacement below.
+        if suggestion["status"] not in ("pending", "approved", "failed", "needs_input"):
+            return jsonify({"ok": False, "error": f"suggestion is already {suggestion['status']}"}), 409
+        task_params = json.dumps({
+            "suggestion_id": sid,
+            "instructions": (payload.get("instructions") or "")[:2000],
+            "target_keyword": (payload.get("target_keyword") or "")[:300],
+            "competitor_urls": (payload.get("competitor_urls") or "")[:5000],
+        })
+        cur.execute(
+            "INSERT INTO tasks (type,status,params,triggered_by) "
+            "VALUES ('execute_suggestion','queued',%s,'dashboard-suggestion-approval') RETURNING id",
+            (task_params,),
+        )
+        task_id = cur.fetchone()["id"]
+        cur.execute("UPDATE suggestions SET status='executing', execution_task_id=%s, updated_at=now() WHERE id=%s",
+                    (task_id, sid))
         conn.commit()
         models.ch_trace({"project": "system", "actor": "agent", "action": "suggestion_approved",
-                         "detail": f"Suggestion {sid} → approved", "gate": "green", "decision": "proceed", "ok": 1})
-        return jsonify({"ok": True})
+                         "detail": f"Suggestion {sid} → execution task {task_id}",
+                         "gate": "green", "decision": "proceed", "ok": 1})
+        return jsonify({"ok": True, "task_id": task_id})
     finally:
         conn.close()
 
@@ -1592,10 +1740,10 @@ def design_file(project, vid):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT cv.file_path, p.name AS slug FROM concept_variations cv JOIN projects p ON p.id=cv.project_id WHERE cv.id=%s", (vid,))
+        cur.execute("SELECT cv.file_path, p.local_path FROM concept_variations cv JOIN projects p ON p.id=cv.project_id WHERE cv.id=%s", (vid,))
         row = cur.fetchone()
-        if row and row[0]:
-            fpath = f"/home/agency/projects/{row[1]}/{row[0]}"
+        if row and row[0] and row[1]:
+            fpath = os.path.join(row[1], row[0])
             try:
                 return send_file(fpath)
             except Exception:
@@ -1764,6 +1912,7 @@ def tasks():
 @app.route("/tasks/<int:task_id>")
 def task_detail(task_id):
     conn = models.db()
+    workflow_links = {"suggestion": None, "content": None, "approval": None, "children": []}
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
@@ -1812,294 +1961,19 @@ def task_detail(task_id):
             if ci_id:
                 cur.execute("SELECT id, title FROM content_items WHERE id=%s", (ci_id,))
                 ci = cur.fetchone()
+        cur.execute("SELECT id,title,status,brand_id FROM suggestions WHERE execution_task_id=%s LIMIT 1", (task_id,))
+        workflow_links["suggestion"] = cur.fetchone()
+        cur.execute("SELECT id,title,status FROM content_items WHERE publish_task_id=%s LIMIT 1", (task_id,))
+        workflow_links["content"] = cur.fetchone()
+        cur.execute("SELECT id,type::text,status::text FROM approvals WHERE task_id=%s LIMIT 1", (task_id,))
+        workflow_links["approval"] = cur.fetchone()
+        cur.execute("SELECT id,type,status FROM tasks WHERE parent_task_id=%s ORDER BY id", (task_id,))
+        workflow_links["children"] = cur.fetchall()
     finally:
         conn.close()
-    return render_template("task_detail.html", t=d, ci=ci, outline_ci=outline_ci)
-
-
-# ── Job Search Routes ──────────────────────────────────────────
-
-@app.route("/jobs")
-def jobs():
-    data = models.get_job_campaigns()
-    stats = models.get_job_stats()
-    return render_template("jobs.html", campaigns=data, stats=stats)
-
-
-@app.route("/jobs/<int:campaign_id>")
-def job_campaign_detail(campaign_id):
-    camp = models.get_job_campaign(campaign_id)
-    if not camp:
-        return redirect("/jobs")
-    listings = models.get_job_listings(campaign_id)
-    applications = models.get_job_applications(campaign_id)
-    run_history = models.get_job_run_history(campaign_id)
-    email_threads = models.get_email_threads(campaign_id)
-    return render_template("job_detail.html", campaign=camp, listings=listings,
-                           applications=applications, run_history=run_history,
-                           email_threads=email_threads)
-
-
-@app.route("/jobs/<int:campaign_id>/listings")
-def job_listings_fragment(campaign_id):
-    status = request.args.get("status")
-    listings = models.get_job_listings(campaign_id, status)
-    return render_template("fragments/job_listings.html", listings=listings, campaign_id=campaign_id)
-
-
-@app.route("/jobs/<int:campaign_id>/applications")
-def job_applications_fragment(campaign_id):
-    apps = models.get_job_applications(campaign_id)
-    return render_template("fragments/job_applications.html", applications=apps)
-
-
-@app.route("/jobs/<int:campaign_id>/run", methods=["POST"])
-def job_campaign_run(campaign_id):
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        params = json.dumps({"campaign_id": campaign_id})
-        cur.execute("INSERT INTO tasks (type, params) VALUES ('run_job_campaign', %s) RETURNING id", (params,))
-        task_id = cur.fetchone()["id"]
-        conn.commit()
-        models.ch_trace({"project": f"jobs-c{campaign_id}", "actor": "human", "action": "campaign_run",
-                         "detail": f"Campaign {campaign_id} run triggered, task {task_id}",
-                         "gate": "green", "decision": "proceed", "ok": 1})
-        return jsonify({"ok": True, "task_id": task_id})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route("/jobs/new", methods=["GET", "POST"])
-def job_campaign_new():
-    if request.method == "POST":
-        name = request.form.get("name", "").strip()
-        titles = request.form.get("job_titles", "").strip()
-        locations = request.form.get("locations", "").strip()
-        resume_text = request.form.get("resume_text", "").strip()
-        target = int(request.form.get("target_jobs_per_run", 10))
-        interval = int(request.form.get("run_interval_hours", 24))
-
-        if not name or not resume_text:
-            return jsonify({"ok": False, "error": "name and resume_text required"}), 400
-
-        conn = models.db()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """INSERT INTO job_campaigns (name, status, target_jobs_per_run, run_interval_hours, resume_text, job_titles, locations)
-                   VALUES (%s, 'draft', %s, %s, %s, %s, %s) RETURNING id""",
-                (name, target, interval, resume_text,
-                 [t.strip() for t in titles.split(",") if t.strip()],
-                 [l.strip() for l in locations.split(",") if l.strip()]),
-            )
-            cid = cur.fetchone()["id"]
-            conn.commit()
-            models.ch_trace({"project": "jobs", "actor": "human", "action": "campaign_created",
-                             "detail": f"Campaign '{name}' created, id={cid}",
-                             "gate": "green", "decision": "proceed", "ok": 1})
-            return jsonify({"ok": True, "campaign_id": cid})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
-        finally:
-            conn.close()
-
-    return render_template("job_new.html")
-
-
-@app.route("/jobs/<int:campaign_id>/settings", methods=["POST"])
-def job_campaign_settings(campaign_id):
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        fields = ["name", "status", "target_jobs_per_run", "run_interval_hours",
-                   "resume_text", "min_salary", "max_applications_per_company",
-                   "follow_up_days", "max_follow_ups"]
-        updates = []
-        vals = []
-        for f in fields:
-            v = request.form.get(f)
-            if v is not None:
-                updates.append(f"{f}=%s")
-                vals.append(v)
-        if updates:
-            vals.append(campaign_id)
-            cur.execute(f"UPDATE job_campaigns SET {', '.join(updates)}, updated_at=now() WHERE id=%s", vals)
-            conn.commit()
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route("/jobs/<int:campaign_id>/gmail-auth")
-def job_gmail_auth(campaign_id):
-    """Initiate Gmail OAuth for a campaign."""
-    sys.path.insert(0, "/home/agency/agency-os/scripts")
-    import importlib
-    ga = importlib.import_module("jobs.gmail_auth")
-    url = ga.get_auth_url(state=str(campaign_id))
-    return redirect(url)
-
-
-@app.route("/jobs/gmail-callback")
-def job_gmail_callback():
-    """OAuth callback (handles code exchange for installed apps flow)."""
-    code = request.args.get("code", "")
-    state = request.args.get("state", "")
-    if not code:
-        return render_template("base.html", content="<p>No authorization code received. Please try again.</p>")
-
-    sys.path.insert(0, "/home/agency/agency-os/scripts")
-    import importlib
-    ga = importlib.import_module("jobs.gmail_auth")
-    token = ga.exchange_code(code)
-    encrypted = ga.encrypt_token(token)
-
-    campaign_id = int(state) if state else None
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        if campaign_id:
-            cur.execute("UPDATE job_campaigns SET gmail_token=%s, gmail_oauth_state='authorized' WHERE id=%s",
-                        (encrypted, campaign_id))
-        conn.commit()
-    except Exception as e:
-        return render_template("base.html", content=f"<p>Error storing token: {e}</p>")
-    finally:
-        conn.close()
-
-    return render_template("base.html", content="<p>Gmail authorized successfully! You can close this tab.</p>")
-
-
-@app.route("/jobs/<int:listing_id>/contact")
-def job_listing_contact(listing_id):
-    """View/manage contacts for a listing."""
-    contacts = models.get_job_contacts(listing_id)
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM job_listings WHERE id=%s", (listing_id,))
-        listing = cur.fetchone()
-    finally:
-        conn.close()
-    if not listing:
-        return "Not found", 404
-    return render_template("job_contacts.html", contacts=contacts, listing=listing)
-
-
-@app.route("/jobs/<int:listing_id>/generate-contact", methods=["POST"])
-def job_generate_contact(listing_id):
-    """Trigger contact discovery for a listing."""
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        params = json.dumps({"listing_id": listing_id})
-        cur.execute("INSERT INTO tasks (type, params) VALUES ('find_contacts', %s) RETURNING id", (params,))
-        task_id = cur.fetchone()["id"]
-        conn.commit()
-        return jsonify({"ok": True, "task_id": task_id})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route("/jobs/<int:listing_id>/generate-resume", methods=["POST"])
-def job_generate_resume(listing_id):
-    """Trigger resume tailoring for a listing."""
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        params = json.dumps({"listing_id": listing_id})
-        cur.execute("INSERT INTO tasks (type, params) VALUES ('generate_resume', %s) RETURNING id", (params,))
-        task_id = cur.fetchone()["id"]
-        conn.commit()
-        return jsonify({"ok": True, "task_id": task_id})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route("/jobs/<int:listing_id>/generate-cover-letter", methods=["POST"])
-def job_generate_cover_letter(listing_id):
-    """Trigger cover letter generation for a listing."""
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        params = json.dumps({"listing_id": listing_id})
-        cur.execute("INSERT INTO tasks (type, params) VALUES ('generate_cover_letter', %s) RETURNING id", (params,))
-        task_id = cur.fetchone()["id"]
-        conn.commit()
-        return jsonify({"ok": True, "task_id": task_id})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route("/jobs/applications")
-def job_all_applications():
-    apps = models.get_job_applications()
-    return render_template("job_applications.html", applications=apps)
-
-
-# ── Aetheria game-project dashboard ──────────────────────────────
-
-@app.route("/aetheria")
-def aetheria():
-    return render_template("aetheria.html")
-
-
-@app.route("/aetheria/data")
-def aetheria_data():
-    status = models.get_game_status()
-    work_blocks = models.get_game_work_blocks()
-    pending_approvals = models.get_game_pending_approvals()
-    loop = models.get_loop_status()
-    # Format for template
-    for t in work_blocks:
-        t["created_fmt"] = fmt_ts(t.get("created_at"))
-        t["duration"] = fmt_dur(t.get("started_at"), t.get("finished_at"))
-        t["tokens"] = (t.get("prompt_tokens") or 0) + (t.get("completion_tokens") or 0)
-        t["cost_f"] = f"{float(t.get('cost') or 0):.4f}" if t.get("cost") else "0"
-        t["model"] = (t.get("params") or {}).get("model", "")
-        # Parse result_ref for commit range + next
-        if t.get("result_ref"):
-            try:
-                t["result"] = json.loads(t["result_ref"])
-            except (json.JSONDecodeError, TypeError):
-                t["result"] = {}
-        else:
-            t["result"] = {}
-    return render_template("fragments/aetheria_status.html",
-                           status=status, work_blocks=work_blocks,
-                           pending_approvals=pending_approvals, loop=loop)
-
-
-@app.route("/aetheria/work-block/<int:tid>/monitor")
-def aetheria_block_monitor(tid):
-    """Live progress fragment for a work block (self-polling while running)."""
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT id, status, progress, progress_text, cost, "
-                    "prompt_tokens, completion_tokens, finished_at, error, result_ref "
-                    "FROM tasks WHERE id=%s", (tid,))
-        t = cur.fetchone()
-        if t:
-            t = {k: dec_to_num(v) for k, v in dict(t).items()}
-            t["tokens"] = (t.get("prompt_tokens") or 0) + (t.get("completion_tokens") or 0)
-            t["cost_f"] = f"{float(t.get('cost') or 0):.4f}" if t.get("cost") else "0"
-    finally:
-        conn.close()
-    if not t:
-        return "", 404
-    return render_template("_task_monitor.html", t=t)
+    return render_template("task_detail.html", t=d, ci=ci, outline_ci=outline_ci,
+                           workflow_links=workflow_links,
+                           can_resume=d.get("status") == "needs_input" and d.get("type") in RESUMABLE_WORKFLOW_TASKS)
 
 
 # ── Static files ───────────────────────────────────────────────

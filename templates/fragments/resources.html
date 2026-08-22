@@ -1,5 +1,6 @@
 {% set mem = resources.memory %}
 {% set disk = resources.disk %}
+{% set maintenance = resources.maintenance %}
 <div id="res-main"
      hx-get="/resources/data"
      hx-trigger="every 15s"
@@ -21,6 +22,14 @@
     <div class="stat-card">
       <div class="stat-value" style="color:var(--text-bright)">{{ disk.used }}/{{ disk.size }}</div>
       <div class="stat-label">Disk</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:{% if maintenance.upgradable_count %}var(--amber){% else %}var(--green){% endif %}">{{ maintenance.upgradable_count|default(0) }}</div>
+      <div class="stat-label">Package updates</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color:{% if maintenance.reboot_required %}var(--red){% else %}var(--green){% endif %}">{% if maintenance.reboot_required %}Required{% else %}Clear{% endif %}</div>
+      <div class="stat-label">Host reboot</div>
     </div>
   </div>
 
