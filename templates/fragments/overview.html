@@ -34,19 +34,43 @@
     <div class="stat-card">
       <div class="stat-value" style="color:var(--green)">{{ data.project_count }}</div>
       <div class="stat-label">Engagements</div>
-      <div class="stat-sub">{{ data.client_count }} clients</div>
+      <div class="stat-sub">{{ data.parked_count }} soft parked</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value" style="color:{{ 'var(--amber)' if data.queued_tasks > 0 else 'var(--green)' }}">
+      <div class="stat-value" style="color:{{ 'var(--amber)' if data.queued_tasks > 0 or data.needs_input_tasks > 0 else 'var(--green)' }}">
         {{ data.running_tasks }}{% if data.queued_tasks > 0 %}+{{ data.queued_tasks }}{% endif %}
       </div>
       <div class="stat-label">Tasks</div>
-      <div class="stat-sub">running + queued</div>
+      <div class="stat-sub">{{ data.needs_input_tasks }} need input</div>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-header"><span class="card-title">Events</span></div>
+    <div class="card-header"><span class="card-title">Attention required</span></div>
+    {% if not data.service_incidents and not data.input_queue and not data.task_incidents and not data.job_incidents %}
+      <p class="empty" style="color:var(--green)">No current service, task, or scheduled-job incident.</p>
+    {% else %}
+      <div class="timeline">
+        {% for item in data.service_incidents %}
+        <div class="event"><span class="badge badge-red">SERVICE</span><span class="action">{{ item.project_name }} / {{ item.service_name }}</span><span class="detail">expected running; container {{ item.container }} is absent</span></div>
+        {% endfor %}
+        {% for item in data.input_queue %}
+        <div class="event"><span class="badge badge-amber">INPUT</span><a class="action" href="/tasks/{{ item.id }}">Task #{{ item.id }} · {{ item.type }}</a><span class="detail">waiting for operator input</span></div>
+        {% endfor %}
+        {% for item in data.task_incidents %}
+        <div class="event"><span class="badge badge-red">TASK</span><a class="action" href="/tasks/{{ item.id }}">#{{ item.id }} · {{ item.type }}</a><span class="detail">{{ item.error or item.status }}</span></div>
+        {% endfor %}
+        {% for item in data.job_incidents %}
+        <div class="event"><span class="badge badge-red">JOB</span><span class="action">{{ item.name }}</span><span class="detail">{{ item.detail }}</span></div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% set content_total = (data.content_reliability.done or 0) + (data.content_reliability.failed or 0) %}
+    <div class="subtle mt-1">Content workflows, last 7 days: {{ data.content_reliability.done or 0 }} succeeded / {{ content_total }} terminal runs. Historical failures remain visible in Operations; this headline is a rolling production signal.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Meaningful activity</span></div>
     <div class="timeline">
       {% for evt in data.events %}
       <div class="event">
@@ -55,7 +79,7 @@
         {% if evt.session_id %}<span class="badge badge-dim" style="font-size:9px">{{ evt.session_id[:8] }}</span>{% endif %}
         <span class="detail">{{ evt.detail[:150] if evt.detail else '' }}</span>
       </div>
-      {% else %}<p class="empty">No events yet</p>{% endfor %}
+      {% else %}<p class="empty">No decision, warning, or operator event yet.</p>{% endfor %}
     </div>
   </div>
 </div>

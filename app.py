@@ -1535,7 +1535,8 @@ def brand_audit_create():
         cur.execute("INSERT INTO tasks (type, params) VALUES ('run_brand_audit', %s) RETURNING id", (params,))
         tid = cur.fetchone()["id"]
         conn.commit()
-        models.ch_trace({"project": "brands", "actor": "human", "action": "brand_audit_created",
+        event_project = f"brand:{int(brand_id)}" if brand_id else domain
+        models.ch_trace({"project": event_project, "actor": "human", "action": "brand_audit_created",
                          "detail": f"Brand audit task {tid} for {domain}", "gate": "green", "decision": "proceed", "ok": 1})
         return jsonify({"ok": True, "task_id": tid})
     except Exception as e:

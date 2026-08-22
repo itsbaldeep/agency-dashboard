@@ -542,22 +542,76 @@ def get_overview():
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) AS c FROM clients")
         client_count = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM projects")
+        cur.execute("SELECT COUNT(*) AS c FROM projects WHERE lifecycle <> 'hard_parked'")
         project_count = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(*) AS c FROM projects WHERE lifecycle = 'soft_parked'")
+        parked_count = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM brands")
         brand_count = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM tasks WHERE status='queued'")
         queued_tasks = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM tasks WHERE status='running'")
         running_tasks = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(*) AS c FROM tasks WHERE status='needs_input'")
+        needs_input_tasks = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM approvals WHERE status='pending'")
         pending_approvals = cur.fetchone()["c"]
+        cur.execute("""
+            SELECT id,type,status,left(COALESCE(error,''),180) AS error,created_at
+            FROM tasks
+            WHERE status IN ('failed','orphaned')
+              AND created_at >= now()-interval '24 hours'
+            ORDER BY created_at DESC LIMIT 8
+        """)
+        task_incidents = cur.fetchall()
+        cur.execute("""
+            SELECT t.id,t.type,t.created_at,
+                   CASE WHEN t.type='execute_approval' THEN 'approval' ELSE 'workflow' END AS source
+            FROM tasks t
+            WHERE t.status='needs_input'
+            ORDER BY t.created_at LIMIT 8
+        """)
+        input_queue = cur.fetchall()
+        cur.execute("""
+            SELECT j.name,r.id,r.status,left(COALESCE(r.detail,''),180) AS detail,r.started_at
+            FROM job_runs r JOIN background_jobs j ON j.id=r.job_id
+            WHERE r.status='failed' AND r.started_at >= now()-interval '24 hours'
+            ORDER BY r.started_at DESC LIMIT 8
+        """)
+        job_incidents = cur.fetchall()
+        cur.execute("""
+            SELECT count(*) FILTER (WHERE status='done') AS done,
+                   count(*) FILTER (WHERE status='failed') AS failed
+            FROM tasks
+            WHERE type IN ('content_research','content_outline','content_compose',
+                           'generate_draft','publish_content')
+              AND created_at >= now()-interval '7 days'
+        """)
+        content_reliability = cur.fetchone()
+        cur.execute("""
+            SELECT s.container,p.name AS project_name,s.name AS service_name
+            FROM services s JOIN projects p ON p.id=s.project_id
+            WHERE p.lifecycle='active' AND s.status='running' AND s.container IS NOT NULL
+            ORDER BY p.name,s.name
+        """)
+        expected_services = cur.fetchall()
     finally:
         conn.close()
 
+    try:
+        running_containers = {
+            c.name for c in docker.DockerClient(base_url="unix:///var/run/docker.sock").containers.list()
+        }
+    except Exception:
+        running_containers = set()
+    service_incidents = [s for s in expected_services if s["container"] not in running_containers]
+
     cols, rows = ch_query(
         "SELECT ts, project, actor, action, detail, gate, decision, ok "
-        "FROM default.events ORDER BY ts DESC LIMIT 20 "
+        "FROM default.events "
+        "WHERE ok = 0 OR gate NOT IN ('', 'green') "
+        "   OR action NOT IN ('health_check','job_completed','memory_sweep') "
+        "ORDER BY ts DESC LIMIT 12 "
         "FORMAT TabSeparatedWithNames"
     )
     events = [dict(zip(cols, row)) for row in rows] if cols else []
@@ -565,8 +619,13 @@ def get_overview():
     return {
         "memory": mem, "cpu": cpu, "disk": disk,
         "client_count": client_count, "project_count": project_count,
+        "parked_count": parked_count,
         "brand_count": brand_count, "queued_tasks": queued_tasks,
-        "running_tasks": running_tasks, "pending_approvals": pending_approvals,
+        "running_tasks": running_tasks, "needs_input_tasks": needs_input_tasks,
+        "pending_approvals": pending_approvals,
+        "task_incidents": task_incidents, "job_incidents": job_incidents,
+        "input_queue": input_queue, "service_incidents": service_incidents,
+        "content_reliability": content_reliability,
         "events": events,
     }
 
@@ -704,14 +763,12 @@ def run_approval(approval_id, decision, note=""):
             conn.commit()
             return True, ""
 
-        task_id = None
-        if approval["type"] not in ("dns", "deploy", "apex-deploy"):
-            cur.execute(
-                "INSERT INTO tasks (type,status,params,triggered_by) "
-                "VALUES ('execute_approval','queued',%s,'dashboard-approval') RETURNING id",
-                (json.dumps({"approval_id": approval_id, "operator_input": note[:2000]}),),
-            )
-            task_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO tasks (type,status,params,triggered_by) "
+            "VALUES ('execute_approval','queued',%s,'dashboard-approval') RETURNING id",
+            (json.dumps({"approval_id": approval_id, "operator_input": note[:2000]}),),
+        )
+        task_id = cur.fetchone()["id"]
         cur.execute(
             "UPDATE approvals SET status='approved', decided_at=now(), note=%s, task_id=%s WHERE id=%s",
             (note[:1000], task_id, approval_id),
@@ -852,12 +909,15 @@ def get_activity(ref_type, ref_id, name):
     tasks = []
     try:
         cur = conn.cursor()
+        key = {"brand": "brand_id", "project": "project_id", "client": "client_id"}.get(ref_type)
         cur.execute("""
             SELECT id, type, status, params, error, created_at, started_at, finished_at
             FROM tasks
-            WHERE params::text ILIKE %s
+            WHERE (%s IS NOT NULL AND params->>%s = %s)
+               OR params->>'domain' = %s
+               OR params->>'repo' = %s
             ORDER BY created_at DESC LIMIT 20
-        """, (f'%{name}%',))
+        """, (key, key, str(ref_id), name, name))
         tasks = cur.fetchall()
     except Exception:
         tasks = []
@@ -865,12 +925,14 @@ def get_activity(ref_type, ref_id, name):
         conn.close()
 
     events = []
-    safe = name.replace("'", "\\'")
+    identity = f"{ref_type}:{ref_id}"
+    safe_identity = identity.replace("'", "\\'")
+    safe_name = name.replace("'", "\\'")
     try:
         cols, rows = ch_query(
             "SELECT ts, actor, action, detail, gate, decision, ok "
             "FROM default.events "
-            f"WHERE project = '{safe}' "
+            f"WHERE project IN ('{safe_identity}','{safe_name}') "
             "ORDER BY ts DESC LIMIT 20 "
             "FORMAT TabSeparatedWithNames"
         )
