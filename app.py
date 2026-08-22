@@ -368,7 +368,8 @@ def onboard_client():
             return
         cur.execute(
             "INSERT INTO brand_properties (brand_id, property_type, value, accessible) "
-            "VALUES (%s, %s, %s, true) ON CONFLICT DO NOTHING",
+            "VALUES (%s, %s, %s, true) ON CONFLICT (brand_id, property_type) DO UPDATE SET "
+            "value=EXCLUDED.value, accessible=EXCLUDED.accessible, created_at=now()",
             (bid, ptype, value))
 
     def _insert_competitors(cur, bid, raw):
@@ -415,7 +416,12 @@ def onboard_client():
             slug = re.sub(r'[^a-z0-9]+', '-', domain.split(".")[0].lower()).strip('-')
             cur.execute("INSERT INTO brands (name, slug, access_tier) VALUES (%s, %s, '0') ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name RETURNING id", (client_name, slug))
             brand_id = cur.fetchone()["id"]
-            cur.execute("INSERT INTO brand_properties (brand_id, property_type, value, accessible) VALUES (%s, 'domain', %s, true) ON CONFLICT DO NOTHING", (brand_id, domain))
+            cur.execute(
+                "INSERT INTO brand_properties (brand_id, property_type, value, accessible) VALUES "
+                "(%s, 'domain', %s, true) ON CONFLICT (brand_id, property_type) DO UPDATE SET "
+                "value=EXCLUDED.value, accessible=EXCLUDED.accessible, created_at=now()",
+                (brand_id, domain),
+            )
             _enrich_brand(cur, brand_id)
             intake = json.dumps({"domain": domain})
             cur.execute("INSERT INTO clients (name, type, status, brand_id, intake_params) VALUES (%s, 'black_box', 'queued', %s, %s) RETURNING id", (client_name, brand_id, intake))
