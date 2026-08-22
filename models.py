@@ -953,6 +953,12 @@ def get_system_data():
         jobs = cur.fetchall()
         cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name")
         tables = [r["table_name"] for r in cur.fetchall()]
+        cur.execute("""
+            SELECT DISTINCT ON (s.name) s.name,h.healthy,h.ts
+            FROM services s LEFT JOIN health_checks h ON h.service_id=s.id
+            ORDER BY s.name,h.ts DESC NULLS LAST
+        """)
+        service_health = {r["name"]: r for r in cur.fetchall()}
     finally:
         conn.close()
 
@@ -984,20 +990,16 @@ def get_system_data():
         check = tool.get("health") or ""
         if check.startswith("container:"):
             tool["observed"] = "healthy" if check.split(":", 1)[1] in running else "down"
+        elif check.startswith("service:"):
+            health = service_health.get(check.split(":", 1)[1])
+            if not health or health.get("healthy") is None:
+                tool["observed"] = "unobserved"
+            else:
+                checked = health.get("ts")
+                stale = checked and (datetime.now(timezone.utc) - checked).total_seconds() > 7200
+                tool["observed"] = "stale" if stale else ("healthy" if health["healthy"] else "down")
         elif check.startswith("credential:"):
             tool["observed"] = "configured" if os.environ.get(check.split(":", 1)[1]) else "missing"
-        elif check == "systemd:opencode@4096":
-            try:
-                response = requests.get("http://100.64.0.1:4096", timeout=2)
-                tool["observed"] = "healthy" if response.status_code < 500 else "degraded"
-            except Exception:
-                tool["observed"] = "down"
-        elif check == "systemd:caddy":
-            try:
-                response = requests.get("https://deployden.tech", timeout=4)
-                tool["observed"] = "healthy" if response.status_code < 500 else "degraded"
-            except Exception:
-                tool["observed"] = "down"
         else:
             tool["observed"] = "operator" if check == "operator-session" else "not_configured"
 
