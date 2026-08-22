@@ -82,6 +82,10 @@ def _host_disk():
     return _host_state().get("disk") or {}
 
 
+def _host_maintenance():
+    return _host_state().get("maintenance") or {}
+
+
 def _parse_mem_val(val):
     val = str(val).strip()
     if val.endswith("MiB"):
@@ -847,7 +851,7 @@ def get_resources():
 
     return {
         "projects": sorted(project_map.values(), key=lambda p: p["cpu_sum"], reverse=True),
-        "memory": mem, "disk": disk,
+        "memory": mem, "disk": disk, "maintenance": _host_maintenance(),
         "total_container_mem_mb": round(total_mb, 0),
         "container_count": len(stats),
     }
