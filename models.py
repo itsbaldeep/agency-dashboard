@@ -83,7 +83,6 @@ def _container_stat(c):
         "PIDs": str(pids),
     }
 
-
 def get_docker_stats():
     dc = docker.DockerClient(base_url="unix:///var/run/docker.sock")
     stats = []
@@ -172,7 +171,8 @@ def _caddy_sites():
 def _engagement_row(ref_type, ref_id, name, onboarding, client_status, has_code,
                     brand_id, brand_name, brand_slug, access_tier,
                     project_id, project_name, project_state, repo_url,
-                    created_at, intake_params, agent_allowed=False):
+                    created_at, intake_params, agent_allowed=False,
+                    classification=None, lifecycle=None, recovery_ref=None):
     return {
         "ref_type": ref_type, "ref_id": ref_id,
         "name": name or project_name or brand_name or "Unknown",
@@ -184,6 +184,9 @@ def _engagement_row(ref_type, ref_id, name, onboarding, client_status, has_code,
         "project_id": project_id, "project_name": project_name,
         "project_state": project_state, "repo_url": repo_url,
         "agent_allowed": agent_allowed,
+        "classification": classification,
+        "lifecycle": lifecycle,
+        "recovery_ref": recovery_ref,
         "created_at": created_at,
         "intake_params": intake_params,
         "last_audit_date": None, "audit_count": 0,
@@ -225,13 +228,14 @@ def get_engagements():
                 created_at=c["created_at"], intake_params=c["intake_params"],
             ))
 
-        # Orphan projects (no client, no linked brand) — exclude infra/archived
+        # Project engagements not represented by a client/brand. Core is shown
+        # here only when it is also a marketing engagement (Deployden).
         cur.execute("""
             SELECT p.* FROM projects p
             WHERE p.id NOT IN (SELECT project_id FROM clients WHERE project_id IS NOT NULL)
               AND p.id NOT IN (SELECT project_id FROM brands WHERE project_id IS NOT NULL)
-              AND p.state <> 'archived'
-              AND lower(p.name) NOT IN ('agency-os','agency-dashboard','aetheria','hearth','streamwise')
+              AND p.lifecycle <> 'hard_parked'
+              AND (p.classification='engagement' OR lower(p.name)='deployden')
             ORDER BY p.created_at DESC
         """)
         for p in cur.fetchall():
@@ -243,6 +247,8 @@ def get_engagements():
                 project_id=p["id"], project_name=p["name"],
                 project_state=p["state"], repo_url=p["repo_url"],
                 created_at=p["created_at"], intake_params=None,
+                classification=p.get("classification"), lifecycle=p.get("lifecycle"),
+                recovery_ref=p.get("recovery_ref"),
             ))
 
         # Orphan brands (no client)
@@ -275,16 +281,21 @@ def get_engagements():
                 r = cur2.fetchone()
                 if r: e["brand_name"] = r["name"]
             if e["project_id"]:
-                cur2.execute("SELECT name, state, repo_url, agent_allowed FROM projects WHERE id=%s", (e["project_id"],))
+                cur2.execute("SELECT name,state,repo_url,agent_allowed,classification,lifecycle,recovery_ref "
+                             "FROM projects WHERE id=%s", (e["project_id"],))
                 r = cur2.fetchone()
                 if r:
                     e["project_name"] = r["name"]
                     e["project_state"] = r["state"]
                     e["repo_url"] = r["repo_url"]
                     e["agent_allowed"] = bool(r["agent_allowed"])
+                    e["classification"] = r.get("classification")
+                    e["lifecycle"] = r.get("lifecycle")
+                    e["recovery_ref"] = r.get("recovery_ref")
     finally:
         conn2.close()
 
+    engs = [e for e in engs if e.get("lifecycle") != "hard_parked"]
     _enrich_engagements(engs)
     engs.sort(key=lambda e: e["last_activity"] or e["created_at"] or datetime.min, reverse=True)
     return engs
@@ -431,9 +442,12 @@ def get_engagement_detail(ref_type, ref_id):
 
         elif ref_type == "brand":
             cur.execute("""
-                SELECT b.*, bp.enabled_stages, bp.schedule_cron
+                SELECT b.*, bp.enabled_stages, bp.schedule_cron,
+                       p.name AS project_name,p.state AS project_state,p.repo_url,
+                       p.local_path,p.classification,p.lifecycle,p.recovery_ref
                 FROM brands b
                 LEFT JOIN brand_pipelines bp ON bp.brand_id = b.id
+                LEFT JOIN projects p ON p.id=b.project_id
                 WHERE b.id = %s
             """, (ref_id,))
             row = cur.fetchone()
@@ -443,12 +457,12 @@ def get_engagement_detail(ref_type, ref_id):
             e["ref_type"] = "brand"
             e["ref_id"] = ref_id
             e["onboarding"] = "marketing_only"
-            e["has_code"] = False
+            e["has_code"] = bool(e.get("local_path"))
             e["client_name"] = row["name"]
             e["client_status"] = "active"
             e["intake_params"] = None
-            e["project_id"] = None
-            e["project_name"] = None
+            e["project_id"] = row.get("project_id")
+            e["project_name"] = row.get("project_name")
             e["brand_id"] = e["id"]
             e["brand_name"] = e["name"]
 
@@ -901,371 +915,8 @@ def get_system_data():
             "client_import_repo": "Clone public repo, analyze, generate AGENTS.md, create project",
             "client_new_project": "Scaffold new project from brief on GitHub + push",
             "design_page": "Two-stage: generate concept specs, then render chosen spec to HTML/CSS/JS",
-            "search_jobs": "Discover job listings matching campaign criteria",
-            "generate_resume": "Tailor resume for a specific job listing",
-            "generate_cover_letter": "Draft personalized cover letter for a job",
-            "find_contacts": "Discover HR/hiring managers at target companies",
-            "generate_linkedin_note": "Generate LinkedIn connection note",
-            "send_application_email": "Send application email via Gmail API",
-            "run_job_campaign": "Full job campaign orchestration (search -> tailor -> draft -> contact -> email)",
-            "aetheria_work_block": "Aetheria autonomous dev loop: one headless opencode session that does ONE checklist item, tests, screenshots, commits, pushes",
             "competitor_scan": "Sitemap scan for competitor pages (deterministic, zero LLM)",
         },
-        "adminer_port": os.environ.get("ADMINER_PORT", ""),
     }
-
-
-# ── Job Search Queries ─────────────────────────────────────────
-
-def get_job_campaigns():
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT jc.*,
-                   (SELECT COUNT(*) FROM job_listings WHERE campaign_id=jc.id) AS listing_count,
-                   (SELECT COUNT(*) FROM job_applications WHERE campaign_id=jc.id) AS application_count,
-                   (SELECT COUNT(*) FROM job_run_history WHERE campaign_id=jc.id) AS run_count,
-                   (SELECT MAX(started_at) FROM job_run_history WHERE campaign_id=jc.id) AS last_run
-            FROM job_campaigns jc
-            ORDER BY jc.created_at DESC
-        """)
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_campaign(campaign_id):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM job_campaigns WHERE id=%s", (campaign_id,))
-        return cur.fetchone()
-    finally:
-        conn.close()
-
-
-def get_job_listings(campaign_id, status=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if status:
-            cur.execute("SELECT * FROM job_listings WHERE campaign_id=%s AND status=%s ORDER BY created_at DESC", (campaign_id, status))
-        else:
-            cur.execute("SELECT * FROM job_listings WHERE campaign_id=%s ORDER BY created_at DESC", (campaign_id,))
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_contacts(listing_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if listing_id:
-            cur.execute("SELECT * FROM job_contacts WHERE listing_id=%s ORDER BY confidence DESC", (listing_id,))
-        else:
-            cur.execute("SELECT jc.*, jl.title AS job_title, jl.company FROM job_contacts jc JOIN job_listings jl ON jl.id=jc.listing_id ORDER BY jc.created_at DESC")
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_email_threads(campaign_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if campaign_id:
-            cur.execute("""
-                SELECT et.*, jc.name AS contact_name, jl.title AS job_title, jl.company
-                FROM email_threads et
-                JOIN job_contacts jc ON jc.id=et.contact_id
-                JOIN job_listings jl ON jl.id=et.listing_id
-                WHERE et.campaign_id=%s ORDER BY et.created_at DESC
-            """, (campaign_id,))
-        else:
-            cur.execute("""
-                SELECT et.*, jc.name AS contact_name, jl.title AS job_title, jl.company
-                FROM email_threads et
-                JOIN job_contacts jc ON jc.id=et.contact_id
-                JOIN job_listings jl ON jl.id=et.listing_id
-                ORDER BY et.created_at DESC LIMIT 50
-            """)
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_applications(campaign_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if campaign_id:
-            cur.execute("""
-                SELECT ja.*, jl.title, jl.company, jl.location, jl.url,
-                       rv.tailored_resume IS NOT NULL AS has_resume,
-                       cl.content IS NOT NULL AS has_cover_letter
-                FROM job_applications ja
-                JOIN job_listings jl ON jl.id=ja.listing_id
-                LEFT JOIN resume_versions rv ON rv.id=ja.resume_id
-                LEFT JOIN cover_letters cl ON cl.id=ja.cover_letter_id
-                WHERE ja.campaign_id=%s
-                ORDER BY ja.created_at DESC
-            """, (campaign_id,))
-        else:
-            cur.execute("""
-                SELECT ja.*, jl.title, jl.company, jl.location, jl.url,
-                       rv.tailored_resume IS NOT NULL AS has_resume,
-                       cl.content IS NOT NULL AS has_cover_letter
-                FROM job_applications ja
-                JOIN job_listings jl ON jl.id=ja.listing_id
-                LEFT JOIN resume_versions rv ON rv.id=ja.resume_id
-                LEFT JOIN cover_letters cl ON cl.id=ja.cover_letter_id
-                ORDER BY ja.created_at DESC LIMIT 100
-            """)
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_run_history(campaign_id):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM job_run_history WHERE campaign_id=%s ORDER BY started_at DESC LIMIT 20", (campaign_id,))
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_resume_versions(listing_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if listing_id:
-            cur.execute("SELECT * FROM resume_versions WHERE listing_id=%s ORDER BY created_at DESC", (listing_id,))
-        else:
-            cur.execute("SELECT rv.*, jl.title, jl.company FROM resume_versions rv JOIN job_listings jl ON jl.id=rv.listing_id ORDER BY rv.created_at DESC LIMIT 20")
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_cover_letters(listing_id=None):
-    conn = db()
-    try:
-        cur = conn.cursor()
-        if listing_id:
-            cur.execute("SELECT * FROM cover_letters WHERE listing_id=%s ORDER BY created_at DESC", (listing_id,))
-        else:
-            cur.execute("SELECT cl.*, jl.title, jl.company FROM cover_letters cl JOIN job_listings jl ON jl.id=cl.listing_id ORDER BY cl.created_at DESC LIMIT 20")
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def get_job_stats():
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) AS c FROM job_campaigns")
-        campaigns = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM job_listings")
-        listings = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM job_applications")
-        applications = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM job_applications WHERE status='email_sent' OR status='applied' OR status='interviewing'")
-        active = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM email_threads WHERE status='sent'")
-        emails_sent = cur.fetchone()["c"]
-        return {"campaigns": campaigns, "listings": listings, "applications": applications, "active": active, "emails_sent": emails_sent}
-    finally:
-        conn.close()
-
-
-# ── Aetheria game-project status ─────────────────────────────────
-
-AETHERIA_REPO_PATH = "/home/agency/projects/aetheria"
-
-
-def get_game_status(repo_path=AETHERIA_REPO_PATH):
-    """Parse STATE.md for the current milestone, checklist progress, next action,
-    and blockers. Returns {} if the repo/STATE.md isn't found (non-game projects
-    simply don't render the card). Also reads CHANGELOG for the last few lines."""
-    import os as _os
-    state_path = _os.path.join(repo_path, "docs", "STATE.md")
-    if not _os.path.isfile(state_path):
-        return {}
-    try:
-        with open(state_path) as f:
-            state = f.read()
-    except Exception:
-        return {}
-
-    # Current milestone (from the "## Current milestone" section header)
-    milestone = ""
-    m = re.search(r"## Current milestone\s*\n\*\*(.+?)\*\*", state)
-    if m:
-        milestone = m.group(1).strip()
-
-    # Next action
-    next_action = ""
-    m = re.search(r"## Next action\n(.+)", state, re.DOTALL)
-    if m:
-        next_action = m.group(1).split("\n\n")[0].strip()
-
-    # Blockers
-    blockers = ""
-    m = re.search(r"## Blockers\n(.+?)(?=\n## |\Z)", state, re.DOTALL)
-    if m:
-        blockers = m.group(1).strip()
-
-    # Checklist progress: count [x] vs [ ] across the whole file
-    done = len(re.findall(r"- \[x\]", state))
-    total = done + len(re.findall(r"- \[ \]", state))
-
-    # Last changelog entries
-    changelog_lines = []
-    cl_path = _os.path.join(repo_path, "docs", "CHANGELOG.md")
-    if _os.path.isfile(cl_path):
-        try:
-            with open(cl_path) as f:
-                cl_lines = [l.strip() for l in f if l.strip().startswith("- 2026")]
-            changelog_lines = cl_lines[:5]
-        except Exception:
-            pass
-
-    # Gallery URL + download URL (known from the project's subdomains).
-    # Include the screens token (from env) so the dashboard link works in one
-    # click — the gallery exchanges ?t for an HttpOnly cookie on first visit.
-    _screens_token = _os.environ.get("AETHERIA_SCREENS_TOKEN", "")
-    if _screens_token:
-        gallery_url = f"https://admin.aetheria.apps.deployden.tech/screens?t={_screens_token}"
-    else:
-        gallery_url = "https://admin.aetheria.apps.deployden.tech/screens"
-    download_url = "https://aetheria.apps.deployden.tech/download"
-
-    # Raw GitHub links for STATE.md + CHANGELOG
-    repo_name = _os.path.basename(repo_path)
-    state_url = f"https://github.com/itsbaldeep/{repo_name}/blob/main/docs/STATE.md"
-    changelog_url = f"https://github.com/itsbaldeep/{repo_name}/blob/main/docs/CHANGELOG.md"
-
-    return {
-        "milestone": milestone,
-        "next_action": next_action,
-        "blockers": blockers,
-        "checklist_done": done,
-        "checklist_total": total,
-        "changelog_lines": changelog_lines,
-        "gallery_url": gallery_url,
-        "download_url": download_url,
-        "state_url": state_url,
-        "changelog_url": changelog_url,
-        "repo_path": repo_path,
-    }
-
-
-def get_game_work_blocks(limit=15):
-    """Recent aetheria_work_block tasks with progress + cost for the dashboard."""
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT id, status, progress, progress_text, cost,
-                   prompt_tokens, completion_tokens, error, result_ref,
-                   created_at, started_at, finished_at, triggered_by, params
-            FROM tasks WHERE type = 'aetheria_work_block'
-            ORDER BY id DESC LIMIT %s
-        """, (limit,))
-        tasks = cur.fetchall()
-        for t in tasks:
-            if isinstance(t.get("params"), str):
-                try:
-                    t["params"] = json.loads(t["params"])
-                except (json.JSONDecodeError, TypeError):
-                    t["params"] = {}
-        return tasks
-    finally:
-        conn.close()
-
-
-def get_game_pending_approvals():
-    """Pending approvals for the aetheria project (screens, gates, human_todo)."""
-    conn = db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT a.*, COALESCE(p.name, 'system') AS project_name
-            FROM approvals a
-            LEFT JOIN projects p ON p.id = a.project_id
-            WHERE a.status = 'pending'
-              AND (a.type::text LIKE 'aetheria_%' OR a.payload::text ILIKE '%aetheria%')
-            ORDER BY a.requested_at DESC
-        """)
-        approvals = cur.fetchall()
-        for a in approvals:
-            if isinstance(a.get("payload"), str):
-                try:
-                    a["payload"] = json.loads(a["payload"])
-                except (json.JSONDecodeError, TypeError):
-                    a["payload"] = {}
-        return approvals
-    finally:
-        conn.close()
-
-
-def get_loop_status():
-    """Job 12 state + next run estimate + loop health for the dashboard."""
-    conn = db()
-    try:
-        cur = conn.cursor()
-        # Job 12 config + last run
-        cur.execute("SELECT id, name, schedule, enabled, script_path FROM background_jobs WHERE id=12")
-        job = cur.fetchone()
-        if not job:
-            return {"enabled": False, "schedule": "—", "next_run": "—"}
-        # Last few job runs
-        cur.execute("""
-            SELECT id, status, started_at, finished_at, duration_sec, detail
-            FROM job_runs WHERE job_id=12 ORDER BY started_at DESC LIMIT 5
-        """)
-        runs = cur.fetchall()
-        # Is a work block currently queued or running?
-        cur.execute("""
-            SELECT count(*) AS c FROM tasks
-            WHERE type='aetheria_work_block' AND status IN ('queued','running')
-        """)
-        active = cur.fetchone()["c"]
-        # Last completed work block
-        cur.execute("""
-            SELECT id, status, finished_at, progress_text, cost, error
-            FROM tasks WHERE type='aetheria_work_block'
-            ORDER BY id DESC LIMIT 1
-        """)
-        last_block = cur.fetchone()
-        # Today's spend on aetheria work blocks
-        cur.execute("""
-            SELECT COALESCE(sum(cost), 0) AS spent,
-                   count(*) AS blocks
-            FROM tasks WHERE type='aetheria_work_block'
-              AND cost IS NOT NULL
-              AND finished_at >= date_trunc('day', now())
-        """)
-        spend = cur.fetchone()
-        # .manual present?
-        import os as _os
-        manual_present = _os.path.isfile("/home/agency/projects/aetheria/.manual")
-        return {
-            "enabled": job["enabled"],
-            "schedule": job["schedule"],
-            "script_path": job["script_path"],
-            "runs": runs,
-            "active_blocks": active,
-            "last_block": last_block,
-            "daily_spent": float(spend["spent"] or 0),
-            "daily_blocks": spend["blocks"],
-            "daily_budget": float(_os.environ.get("AETHERIA_DAILY_BUDGET_USD", "3.00")),
-            "manual_present": manual_present,
-        }
-    finally:
-        conn.close()
+    if e.get("classification") == "core":
+        return "Core"

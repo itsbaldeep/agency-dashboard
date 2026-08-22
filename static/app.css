@@ -117,6 +117,8 @@ body{
 .badge.completed,.badge.approved,.badge.live,.badge.yes{background:var(--green-dim);color:var(--green)}
 .badge.failed,.badge.rejected,.badge.red{background:var(--red-dim);color:var(--red)}
 .badge.needs_input,.badge.needs_publish_input{background:rgba(245,166,35,0.14);color:var(--amber)}
+.badge.soft_parked{background:rgba(165,114,255,0.12);color:var(--purple)}
+.badge.hard_parked{background:var(--red-dim);color:var(--red)}
 .badge.pending{background:var(--amber-dim);color:var(--amber)}
 .badge.queued{background:rgba(165,114,255,0.12);color:var(--purple)}
 .badge.idea{background:var(--purple-dim);color:var(--purple)}

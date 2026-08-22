@@ -7,6 +7,8 @@
     <span class="badge {{ eng.onboarding }}">{{ eng.onboarding.replace('_',' ') }}</span>
     <span class="badge badge-{{ eng.client_status }}">{{ eng.client_status }}</span>
     {% if eng.project_state %}<span class="badge {{ eng.project_state }}">{{ eng.project_state }}</span>{% endif %}
+    {% if eng.classification %}<span class="badge badge-purple">{{ eng.classification }}</span>{% endif %}
+    {% if eng.lifecycle %}<span class="badge {{ eng.lifecycle }}">{{ eng.lifecycle.replace('_',' ') }}</span>{% endif %}
     {% if eng.access_tier != '0' %}<span class="badge badge-blue">Tier {{ eng.access_tier }}</span>{% endif %}
   </div>
 </div>
@@ -27,6 +29,14 @@
       <span class="subtle">{{ k }}: <strong>{{ v }}</strong></span>
       {% endfor %}
     </div>
+  </div>
+  {% endif %}
+
+  {% if eng.lifecycle == 'soft_parked' %}
+  <div class="card">
+    <div class="card-title mb-2">Soft parked</div>
+    <p class="subtle">Live services and public routes are stopped. Source, data volumes, and the recovery reference are retained. Resume is intentionally not one-click until this engagement has a tested start/health manifest.</p>
+    {% if eng.recovery_ref %}<span class="mono subtle">{{ eng.recovery_ref }}</span>{% endif %}
   </div>
   {% endif %}
 

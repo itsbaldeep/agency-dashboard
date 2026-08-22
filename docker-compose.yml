@@ -1,6 +1,7 @@
 services:
   dashboard:
     build: .
+    command: ["gunicorn", "--bind", "0.0.0.0:80", "--workers", "2", "--threads", "4", "--timeout", "60", "app:app"]
     container_name: agency-dashboard
     restart: unless-stopped
     networks:
@@ -11,7 +12,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /home/agency/agency-os/caddy-apps:/caddy-apps:ro
       - /home/agency/agency-os/scripts:/home/agency/agency-os/scripts:ro
-      - /home/agency/projects/aetheria/docs:/home/agency/projects/aetheria/docs:ro
     env_file: /home/agency/agency-os/.env
     environment:
       DB_HOST: agency-postgres
@@ -21,21 +21,6 @@ services:
       CH_USER: agency
       BIND_HOST: "0.0.0.0"
       BIND_PORT: "80"
-      ADMINER_PORT: "5002"
-
-  adminer:
-    image: adminer:latest
-    container_name: agency-adminer
-    restart: unless-stopped
-    mem_limit: 64m
-    networks:
-      - net-control
-    ports:
-      - "100.64.0.1:5002:8080"
-    environment:
-      ADMINER_DEFAULT_SERVER: agency-postgres
-      ADMINER_DEFAULT_DB: agencyos
-      ADMINER_DESIGN: nette
 
 networks:
   net-control:

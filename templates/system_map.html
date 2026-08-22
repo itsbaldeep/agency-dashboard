@@ -63,13 +63,4 @@
   </div>
 </div>
 
-{% if system.adminer_port %}
-<div class="card">
-  <div class="card-header"><span class="card-title">Consoles</span></div>
-  <div class="gap-2">
-    <a href="/consoles/pg" target="_blank" class="btn btn-sm">Adminer (Postgres)</a>
-    <a href="/consoles/ch" target="_blank" class="btn btn-sm">ClickHouse Play</a>
-  </div>
-</div>
-{% endif %}
 {% endblock %}
