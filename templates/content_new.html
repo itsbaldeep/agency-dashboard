@@ -45,6 +45,7 @@
 {% if outline_item %}
 {% set blocks = outline_item.structured_obj.get('blocks', []) %}
 {% set kw = outline_item.structured_obj.get('target_keyword', '') %}
+{% set facts = outline_item.structured_obj.get('facts', []) %}
 
 <div class="card" style="margin-bottom:20px;">
   <div class="card-header">
@@ -57,6 +58,19 @@
   </div>
 
   {% if blocks %}
+  <details style="margin:10px 0;" {% if not facts %}open{% endif %}>
+    <summary><strong>Verified evidence: {{ facts|length }} fact{{ '' if facts|length == 1 else 's' }}</strong></summary>
+    {% if facts %}
+    <ol style="padding-left:18px;">
+      {% for fact in facts %}
+      <li style="margin:8px 0;">
+        {{ fact.claim }}
+        <div class="subtle">{{ fact.id }} · <a href="{{ fact.source_url }}" target="_blank" rel="noopener noreferrer">source</a> · “{{ fact.evidence_snippet }}”</div>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}<p class="subtle">No source-verifiable facts were extracted. Data tables, charts, and statistical callouts are blocked for this outline.</p>{% endif %}
+  </details>
   {# Block type chips #}
   <div class="mb-2" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;">
     {% for b in blocks %}
@@ -70,6 +84,7 @@
       <b>{{ b.type }}</b>
       {% if b.chart_type %}<span class="subtle">({{ b.chart_type }})</span>{% endif %}
       — {{ b.brief }}
+      {% if b.fact_ids %}<span class="subtle"> · evidence: {{ b.fact_ids|join(', ') }}</span>{% endif %}
     </li>
     {% endfor %}
   </ol>

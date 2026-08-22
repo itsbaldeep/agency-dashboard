@@ -810,37 +810,34 @@ def get_spend():
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT COALESCE(prj.name, 'system') AS project_name,
-                   COUNT(*) AS total_tasks,
-                   SUM(t.cost) AS total_cost
-            FROM tasks t
-            LEFT JOIN LATERAL (
-                SELECT p.name,
-                       p.id = CASE WHEN t.params->>'project_id' ~ '^[0-9]+$'
-                                   THEN (t.params->>'project_id')::int END AS bypid,
-                       lower(p.repo_name) = lower(t.params->>'repo')       AS byrepo
-                FROM projects p
-                WHERE p.id = CASE WHEN t.params->>'project_id' ~ '^[0-9]+$'
-                                  THEN (t.params->>'project_id')::int END
-                   OR lower(p.repo_name) = lower(t.params->>'repo')
-                   OR lower(p.name)      = lower(t.params->>'repo')
-                ORDER BY bypid DESC NULLS LAST, byrepo DESC NULLS LAST, p.id
-                LIMIT 1
-            ) prj ON true
-            WHERE t.cost IS NOT NULL
+            SELECT COALESCE(p.name, 'system / unassigned') AS project_name,
+                   COUNT(*) AS recorded_runs,
+                   SUM(u.tokens_in + u.tokens_out) AS total_tokens,
+                   SUM(u.cost_usd) AS total_cost
+            FROM token_usage u
+            LEFT JOIN projects p ON p.id=u.project_id
             GROUP BY project_name
-            ORDER BY total_cost DESC NULLS LAST
+            ORDER BY total_cost DESC NULLS LAST, total_tokens DESC
         """)
         by_project = cur.fetchall()
         cur.execute("""
-            SELECT SUM(prompt_tokens) AS total_tokens_in,
-                   SUM(completion_tokens) AS total_tokens_out,
-                   SUM(cost) AS total_cost,
-                   COUNT(*) AS total_calls
-            FROM tasks WHERE cost IS NOT NULL
+            SELECT COALESCE(SUM(tokens_in),0) AS total_tokens_in,
+                   COALESCE(SUM(tokens_out),0) AS total_tokens_out,
+                   COALESCE(SUM(cost_usd),0) AS total_cost,
+                   COUNT(*) AS recorded_runs
+            FROM token_usage
         """)
         totals = cur.fetchone()
-        return {"by_project": by_project, "totals": totals}
+        cur.execute("""
+            SELECT model,COUNT(*) AS recorded_runs,
+                   SUM(tokens_in) AS tokens_in,SUM(tokens_out) AS tokens_out,
+                   SUM(cost_usd) AS total_cost
+            FROM token_usage
+            GROUP BY model
+            ORDER BY total_cost DESC NULLS LAST, (SUM(tokens_in)+SUM(tokens_out)) DESC
+        """)
+        by_model = cur.fetchall()
+        return {"by_project": by_project, "by_model": by_model, "totals": totals}
     finally:
         conn.close()
 

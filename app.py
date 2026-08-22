@@ -1047,11 +1047,6 @@ def _render_content_body(ci, item_id, conn, cur):
         sys.path.insert(0, "/home/agency/agency-os/scripts")
         import importlib
         cp = importlib.import_module("content_pipeline")
-        blocks = cp.ensure_slot_images(item_id, blocks)
-        if any(b.get("type") == "image_slot" for b in blocks):
-            cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
-                        (json.dumps(blocks), item_id))
-            conn.commit()
         return banner + cp.render_pipeline_css() + \
             f"<div class='pipeline-article'>{cp.render_content_blocks(blocks, ci['title'])}</div>"
     structured = ci.get('structured')
@@ -1101,10 +1096,15 @@ def content_preview(item_id):
                 s = None
         if isinstance(s, dict):
             target_keyword = s.get("target_keyword", "") or ""
+        blocks = _parse_jsonb(ci.get("content_blocks"))
+        has_image_slots = isinstance(blocks, list) and any(
+            isinstance(block, dict) and block.get("type") == "image_slot" for block in blocks
+        )
         updated_fmt = fmt_ts(ci.get("updated_at") or ci.get("created_at"))
         return render_template("content_preview.html", active='content',
                                ci=ci, body_html=body_html,
                                target_keyword=target_keyword,
+                               has_image_slots=has_image_slots,
                                updated_fmt=updated_fmt)
     finally:
         conn.close()
@@ -1131,6 +1131,7 @@ def content_images(item_id):
         sys.path.insert(0, "/home/agency/agency-os/scripts")
         import importlib
         cp = importlib.import_module("content_pipeline")
+        blocks = cp.source_slot_images(item_id, blocks)
         blocks = cp.ensure_slot_images(item_id, blocks)
         cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
                     (json.dumps(blocks), item_id))

@@ -12,6 +12,9 @@
     {% if ci.body or ci.content_blocks %}
     <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
     {% endif %}
+    {% if has_image_slots and ci.status in ('draft', 'outline') %}
+    <button class="btn btn-sm" onclick="sourceImages({{ ci.id }})">Source images</button>
+    {% endif %}
     {% if ci.status in ('draft', 'needs_publish_input') %}
     <button class="btn btn-sm btn-green" onclick="openPublish({{ ci.id }})">Approve &amp; Publish</button>
     {% endif %}
@@ -68,6 +71,12 @@ async function regenerateContent(id) {
   if (!confirm('Regenerate this content? The current draft will be cleared.')) return;
   await fetch('/content/'+id+'/regenerate', {method:'POST'});
   location.reload();
+}
+async function sourceImages(id) {
+  var r = await fetch('/content/'+id+'/images', {method:'POST'});
+  var d = await r.json();
+  if (d.ok) { location.reload(); return; }
+  alert(d.error || 'Unable to source images');
 }
 </script>
 {% endblock %}
