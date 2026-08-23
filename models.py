@@ -17,6 +17,7 @@ CH_HOST = os.environ.get("CH_HOST", "agency-clickhouse")
 CH_USER = os.environ.get("CH_USER", "agency")
 CH_PASS = os.environ.get("CH_PASS") or os.environ.get("CLICKHOUSE_PASSWORD")
 HOST_STATE_PATH = os.environ.get("AGENCY_HOST_STATE", "/agency-state/host-health.json")
+ALERT_STATE_PATH = os.environ.get("AGENCY_ALERT_STATE", "/agency-state/alerts.json")
 
 
 def db():
@@ -64,6 +65,35 @@ def _host_state():
         return payload
     except (OSError, ValueError, TypeError, KeyError):
         return {"stale": True}
+
+
+def get_alert_state():
+    """Read the secret-free operator-chore snapshot produced on the host."""
+    try:
+        with open(ALERT_STATE_PATH) as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError("alert snapshot must be an object")
+        generated = datetime.fromisoformat(payload["generated_at"].replace("Z", "+00:00"))
+        payload["stale"] = (
+            datetime.now(timezone.utc) - generated
+        ).total_seconds() > 1800
+        return payload
+    except (OSError, ValueError, TypeError, KeyError):
+        return {
+            "stale": True,
+            "generated_at": None,
+            "summary": {"open_count": 1, "critical_count": 1, "clear_count": 0},
+            "error": "Operator snapshot is unavailable. Run a dashboard recheck after the worker is online.",
+        }
+
+
+def get_alert_nav_count():
+    summary = get_alert_state().get("summary") or {}
+    try:
+        return max(0, int(summary.get("open_count") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 def get_docker_stats():
     stats = _host_state().get("containers") or []
@@ -505,7 +535,12 @@ def get_overview():
         running_tasks = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c FROM tasks WHERE status='needs_input'")
         needs_input_tasks = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM approvals WHERE status='pending'")
+        cur.execute("""
+            SELECT COUNT(*) AS c FROM approvals a
+            LEFT JOIN projects p ON p.id=a.project_id
+            WHERE a.status='pending'
+              AND (a.project_id IS NULL OR p.classification='core')
+        """)
         pending_approvals = cur.fetchone()["c"]
         cur.execute("""
             SELECT id,type,status,left(COALESCE(error,''),180) AS error,created_at
@@ -660,23 +695,26 @@ def get_job_runs(limit=50, job_id=None):
         conn.close()
 
 
-def get_approvals(pending_only=True):
+def get_approvals(pending_only=True, core_only=True):
     conn = db()
     try:
         cur = conn.cursor()
+        scope = "AND (a.project_id IS NULL OR p.classification='core')" if core_only else ""
         if pending_only:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT a.*, COALESCE(p.name, 'system') AS project_name
                 FROM approvals a
                 LEFT JOIN projects p ON p.id = a.project_id
                 WHERE a.status = 'pending'
+                {scope}
                 ORDER BY a.requested_at DESC
             """)
         else:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT a.*, COALESCE(p.name, 'system') AS project_name
                 FROM approvals a
                 LEFT JOIN projects p ON p.id = a.project_id
+                WHERE 1=1 {scope}
                 ORDER BY a.requested_at DESC LIMIT 50
             """)
         approvals = cur.fetchall()
@@ -697,7 +735,12 @@ def run_approval(approval_id, decision, note=""):
     conn = db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id,type::text,status::text,task_id FROM approvals WHERE id=%s FOR UPDATE", (approval_id,))
+        cur.execute("""
+            SELECT a.id,a.type::text,a.status::text,a.task_id
+            FROM approvals a LEFT JOIN projects p ON p.id=a.project_id
+            WHERE a.id=%s AND (a.project_id IS NULL OR p.classification='core')
+            FOR UPDATE OF a
+        """, (approval_id,))
         approval = cur.fetchone()
         if not approval or approval["status"] != "pending":
             return False, "approval not found or already decided"
@@ -899,7 +942,58 @@ def get_activity(ref_type, ref_id, name):
     return {"tasks": tasks, "events": events}
 
 
-# ── System Map ──────────────────────────────────────────────────
+# ── System Map / Core Tools ─────────────────────────────────────
+
+def _registry(filename, key):
+    for base in ("/agency-config", "/home/agency/core/agency-os/config"):
+        path = os.path.join(base, filename)
+        try:
+            with open(path) as handle:
+                value = json.load(handle).get(key, [])
+            return value if isinstance(value, list) else []
+        except (OSError, ValueError, TypeError):
+            continue
+    return []
+
+
+def _observe_tools(tools, service_health=None):
+    service_health = service_health or {}
+    running = set(get_docker_stats())
+    for tool in tools:
+        check = tool.get("health") or ""
+        if check.startswith("container:"):
+            tool["observed"] = "healthy" if check.split(":", 1)[1] in running else "down"
+        elif check.startswith("service:"):
+            health = service_health.get(check.split(":", 1)[1])
+            if not health or health.get("healthy") is None:
+                tool["observed"] = "unobserved"
+            else:
+                checked = health.get("ts")
+                stale = checked and (datetime.now(timezone.utc) - checked).total_seconds() > 7200
+                tool["observed"] = "stale" if stale else ("healthy" if health["healthy"] else "down")
+        elif check.startswith("credential:"):
+            tool["observed"] = "configured" if os.environ.get(check.split(":", 1)[1]) else "missing"
+        elif check.startswith("state:"):
+            tool["observed"] = check.split(":", 1)[1]
+        else:
+            tool["observed"] = "operator" if check == "operator-session" else "not_configured"
+    return tools
+
+
+def get_tools():
+    """Core agency tools. Client/project credentials never belong here."""
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT ON (s.name) s.name,h.healthy,h.ts
+            FROM services s LEFT JOIN health_checks h ON h.service_id=s.id
+            ORDER BY s.name,h.ts DESC NULLS LAST
+        """)
+        service_health = {r["name"]: r for r in cur.fetchall()}
+    finally:
+        conn.close()
+    return _observe_tools(_registry("core-tools.json", "tools"), service_health)
 
 def get_system_data():
     conn = db()
@@ -920,36 +1014,8 @@ def get_system_data():
 
     networks = _host_state().get("networks") or []
 
-    def registry(filename, key):
-        for base in ("/agency-config", "/home/agency/core/agency-os/config"):
-            path = os.path.join(base, filename)
-            try:
-                with open(path) as handle:
-                    value = json.load(handle).get(key, [])
-                return value if isinstance(value, list) else []
-            except (OSError, ValueError, TypeError):
-                continue
-        return []
-
-    capabilities = registry("capabilities.json", "capabilities")
-    tools = registry("core-tools.json", "tools")
-    running = set(get_docker_stats())
-    for tool in tools:
-        check = tool.get("health") or ""
-        if check.startswith("container:"):
-            tool["observed"] = "healthy" if check.split(":", 1)[1] in running else "down"
-        elif check.startswith("service:"):
-            health = service_health.get(check.split(":", 1)[1])
-            if not health or health.get("healthy") is None:
-                tool["observed"] = "unobserved"
-            else:
-                checked = health.get("ts")
-                stale = checked and (datetime.now(timezone.utc) - checked).total_seconds() > 7200
-                tool["observed"] = "stale" if stale else ("healthy" if health["healthy"] else "down")
-        elif check.startswith("credential:"):
-            tool["observed"] = "configured" if os.environ.get(check.split(":", 1)[1]) else "missing"
-        else:
-            tool["observed"] = "operator" if check == "operator-session" else "not_configured"
+    capabilities = _registry("capabilities.json", "capabilities")
+    tools = _observe_tools(_registry("core-tools.json", "tools"), service_health)
 
     return {
         "jobs": jobs, "tables": tables, "networks": networks,

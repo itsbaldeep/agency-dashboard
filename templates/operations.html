@@ -2,12 +2,17 @@
 {% block content %}
 <div class="page-header">
   <h1>Operations</h1>
-  <div class="sub">Jobs &amp; approvals</div>
+  <div class="sub">Machine orchestration and core-service execution gates</div>
+</div>
+
+<div class="alert alert-blue mb-3">
+  <strong>Scope:</strong>
+  <span>Approvals here are only for Agency OS, Agency Dashboard, Deployden, or system-level changes. Engagement and content decisions stay with their engagement/content workflow. Backups, credentials, and maintenance are in <a href="/alerts">Alerts</a>.</span>
 </div>
 
 <div class="section-tabs">
   <a href="#jobs" class="active" onclick="switchTab(event,'jobs')">Jobs</a>
-  <a href="#approvals" onclick="switchTab(event,'approvals')">Approvals</a>
+  <a href="#approvals" onclick="switchTab(event,'approvals')">Core Approvals</a>
   <a href="#runs" onclick="switchTab(event,'runs')">Job Runs</a>
 </div>
 
