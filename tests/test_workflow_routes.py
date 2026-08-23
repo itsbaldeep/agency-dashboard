@@ -89,6 +89,32 @@ class WorkflowRouteTests(unittest.TestCase):
         inserts = [sql for sql, _ in conn.cursor_value.calls if sql.startswith("INSERT INTO tasks")]
         self.assertEqual(inserts, [])
 
+    def test_alert_fragment_renders_when_snapshot_is_unavailable(self):
+        with mock.patch.object(dashboard.models, "get_alert_state", return_value={
+            "stale": True,
+            "summary": {"open_count": 1, "critical_count": 1, "clear_count": 0},
+            "error": "snapshot unavailable",
+        }):
+            response = self.client.get("/alerts/data")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Snapshot unavailable", response.data)
+
+    def test_alert_action_is_whitelisted_and_silent(self):
+        conn = FakeConnection([None, {"id": 77}])
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = self.client.post("/api/alerts/actions", json={"action": "recheck_system"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["task_id"], 77)
+        insert = next(params for sql, params in conn.cursor_value.calls if sql.startswith("INSERT INTO tasks"))
+        self.assertEqual(json.loads(insert[0]), {"action": "recheck_system", "silent": True})
+        self.assertEqual(conn.commits, 1)
+
+    def test_alert_action_rejects_shell_and_unconfirmed_backup(self):
+        shell = self.client.post("/api/alerts/actions", json={"action": "run_shell"})
+        backup = self.client.post("/api/alerts/actions", json={"action": "mark_offsite"})
+        self.assertEqual(shell.status_code, 400)
+        self.assertEqual(backup.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

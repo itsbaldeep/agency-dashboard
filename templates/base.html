@@ -33,6 +33,10 @@
     </a>
 
     <div class="sidebar-section">Operations</div>
+    <a href="/alerts" class="{% if active == 'alerts' %}active{% endif %}">
+      <span class="nav-icon">&#9888;</span> Alerts
+      {% if nav_alert_count %}<span class="nav-count">{{ nav_alert_count }}</span>{% endif %}
+    </a>
     <a href="/operations" class="{% if active == 'operations' %}active{% endif %}">
       <span class="nav-icon">&#9881;</span> Operations
     </a>
@@ -52,6 +56,9 @@
     </a>
 
     <div class="sidebar-section">System</div>
+    <a href="/tools" class="{% if active == 'tools' %}active{% endif %}">
+      <span class="nav-icon">&#8853;</span> Tools
+    </a>
     <a href="/projects" class="{% if active == 'projects' %}active{% endif %}">
       <span class="nav-icon">&#8999;</span> Projects
     </a>

@@ -1,0 +1,114 @@
+{% set summary = alerts.summary or {} %}
+{% set backup = alerts.backup or {} %}
+{% set offsite = backup.offsite or {} %}
+{% set maintenance = alerts.maintenance or {} %}
+<div id="alerts-main"
+     hx-get="/alerts/data"
+     hx-trigger="every 30s"
+     hx-select="#alerts-main"
+     hx-swap="outerHTML">
+  {% if alerts.error %}
+  <div class="alert alert-red mb-3"><strong>Snapshot unavailable</strong><span>{{ alerts.error }}</span></div>
+  {% endif %}
+  {% if alerts.stale %}
+  <div class="alert alert-red mb-3"><strong>Evidence is stale.</strong><span>Use “Recheck everything” above. No Discord alert is sent by a manual recheck.</span></div>
+  {% endif %}
+
+  <div class="stats alert-stats">
+    <div class="stat-card"><div class="stat-value" style="color:{{ 'var(--red)' if summary.open_count else 'var(--green)' }}">{{ summary.open_count or 0 }}</div><div class="stat-label">Open chores</div><div class="stat-sub">need a human or a clean recheck</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:{{ 'var(--red)' if summary.critical_count else 'var(--green)' }}">{{ summary.critical_count or 0 }}</div><div class="stat-label">Urgent</div><div class="stat-sub">backup, weak credentials, or reboot</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--green)">{{ summary.clear_count or 0 }}</div><div class="stat-label">Clear groups</div><div class="stat-sub">based on current evidence</div></div>
+  </div>
+
+  <section class="chore-card {{ 'is-open' if backup.status != 'clear' else 'is-clear' }}">
+    <div class="chore-heading">
+      <div><span class="chore-kicker">Recovery</span><h2>Laptop backup copy</h2><p>Server creates the bundle daily. Once each Saturday, copy the latest bundle to your laptop and verify its checksum.</p></div>
+      <span class="badge {{ 'badge-red' if offsite.overdue else 'badge-green' }}">{{ 'Action required' if offsite.overdue else 'Done until ' ~ (offsite.next_due or 'next Saturday') }}</span>
+    </div>
+    {% if backup.path %}
+    <div class="evidence-grid">
+      <div><span>Created</span><strong>{{ backup.at[:19]|replace('T',' ') if backup.at else 'unknown' }} UTC</strong></div>
+      <div><span>Bundle</span><strong>{{ backup.filename }}</strong></div>
+      <div><span>Size</span><strong>{{ backup.bytes|filesize }}</strong></div>
+      <div><span>Server verification</span><strong class="{{ 'severity-green' if backup.server_verified else 'severity-yellow' }}">{{ 'Passed' if backup.server_verified else 'Not yet verified' }}</strong></div>
+    </div>
+    <div class="command-label">1. Run on your laptop</div>
+    <div class="command-row"><code>{{ backup.scp_command }}</code><button class="btn btn-sm" data-copy="{{ backup.scp_command|e }}" onclick="copyCommand(this)">Copy</button></div>
+    <div class="command-label">2. Run in the laptop folder and compare with the expected value</div>
+    <div class="command-row"><code>{{ backup.verify_command }}</code><button class="btn btn-sm" data-copy="{{ backup.verify_command|e }}" onclick="copyCommand(this)">Copy</button></div>
+    <div class="checksum"><span>Expected SHA-256</span><code>{{ backup.sha256 }}</code><button class="btn btn-sm" data-copy="{{ backup.sha256|e }}" onclick="copyCommand(this)">Copy</button></div>
+    <div class="chore-actions">
+      <button class="btn" onclick="runAlertAction('verify_backup')">Verify bundle on server</button>
+      {% if offsite.overdue %}
+      <label class="confirm-row"><input type="checkbox" id="backup-confirmed"> <span>I copied this exact bundle to my laptop and its SHA-256 matched.</span></label>
+      <input id="backup-note" class="note-input" placeholder="Optional note, e.g. laptop folder or external drive">
+      <button class="btn btn-primary" onclick="runAlertAction('mark_offsite')">Mark laptop copy complete</button>
+      {% else %}
+      <span class="completion-note">Acknowledged {{ offsite.confirmed_on }}. The next weekly reminder starts {{ offsite.next_due }}.</span>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="alert alert-red"><strong>No backup recorded.</strong><span>The daily backup job must complete before this chore can be acknowledged.</span></div>
+    {% endif %}
+  </section>
+
+  <section class="chore-card {{ 'is-open' if (alerts.credential_summary or {}).open else 'is-clear' }}">
+    <div class="chore-heading">
+      <div><span class="chore-kicker">Security</span><h2>Core credential rotation</h2><p>Names and evidence only—secret values are never sent to this page. Client and engagement credentials are outside this core registry.</p></div>
+      <div class="gap-2"><span class="badge badge-amber">{{ (alerts.credential_summary or {}).open or 0 }} open</span><button class="btn btn-sm" onclick="runAlertAction('recheck_credentials')">Recheck credentials</button></div>
+    </div>
+    <div class="table-wrap"><table class="credential-table">
+      <tr><th>Credential</th><th>Source</th><th>Evidence</th><th>What you do</th><th></th></tr>
+      {% for item in alerts.credentials or [] %}
+      <tr>
+        <td><strong>{{ item.name }}</strong><div class="mono subtle">{{ item.id }}</div></td>
+        <td class="mono">{{ item.source_path }}</td>
+        <td>
+          {% if item.placeholder_like %}<span class="badge badge-red">Weak / unhealthy</span>
+          {% elif item.human_rotated_at %}<span class="badge badge-green">Human-rotated</span>
+          {% else %}<span class="badge badge-amber">Not acknowledged</span>{% endif %}
+          {% if item.health_status %}<div class="subtle mt-1">Probe: {{ item.health_status }}</div>{% endif %}
+        </td>
+        <td>{{ item.next_action }}{% if item.command %}<div class="mini-command"><code>{{ item.command }}</code><button class="btn btn-xs" data-copy="{{ item.command|e }}" onclick="copyCommand(this)">Copy</button></div>{% endif %}</td>
+        <td>
+          {% if not item.placeholder_like and not item.human_rotated_at %}
+          <button class="btn btn-sm btn-green" onclick="runAlertAction('mark_credential',{credential_id:{{ item.id|tojson }}})">Mark rotated</button>
+          {% elif item.placeholder_like %}
+          <span class="subtle">Replace first</span>
+          {% else %}<span class="severity-green">Done</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}<tr><td colspan="5" class="empty">No core credential evidence is available.</td></tr>{% endfor %}
+    </table></div>
+  </section>
+
+  <section class="chore-card {{ 'is-open' if maintenance.status != 'clear' else 'is-clear' }}">
+    <div class="chore-heading">
+      <div><span class="chore-kicker">Host maintenance</span><h2>Packages and kernel</h2><p>The dashboard audits and explains this chore. It deliberately does not run sudo upgrades or reboot the VPS.</p></div>
+      <div class="gap-2"><span class="badge {{ 'badge-red' if maintenance.reboot_required else ('badge-amber' if maintenance.upgradable_count else 'badge-green') }}">{{ maintenance.upgradable_count or 0 }} updates{% if maintenance.reboot_required %} · reboot required{% endif %}</span><button class="btn btn-sm" onclick="runAlertAction('recheck_system')">Recheck system</button></div>
+    </div>
+    <div class="evidence-grid">
+      <div><span>Running kernel</span><strong class="mono">{{ maintenance.current_kernel or 'unknown' }}</strong></div>
+      <div><span>Reboot</span><strong class="{{ 'severity-red' if maintenance.reboot_required else 'severity-green' }}">{{ 'Required' if maintenance.reboot_required else 'Not required' }}</strong></div>
+      <div class="wide"><span>Pending packages</span><strong>{{ (maintenance.upgradable_packages or [])|join(', ') if maintenance.upgradable_packages else 'None' }}</strong></div>
+      {% if maintenance.reboot_packages %}<div class="wide"><span>Reboot-triggering packages</span><strong>{{ maintenance.reboot_packages|join(', ') }}</strong></div>{% endif %}
+    </div>
+    <ol class="command-steps">
+      {% for command in maintenance.commands or [] %}
+      <li><div class="command-row"><code>{{ command }}</code><button class="btn btn-sm" data-copy="{{ command|e }}" onclick="copyCommand(this)">Copy</button></div></li>
+      {% endfor %}
+    </ol>
+    <div class="alert alert-blue"><strong>Safe sequence:</strong><span>Inspect the list, upgrade during a maintenance window, reboot only after checking running tasks, then return here and press “Recheck system.”</span></div>
+  </section>
+
+  <section class="chore-card {{ 'is-open' if (alerts.root_recovery or {}).status != 'clear' or (alerts.failed_units or {}).status != 'clear' else 'is-clear' }}">
+    <div class="chore-heading"><div><span class="chore-kicker">Other operator items</span><h2>Access and one-time setup</h2><p>Items that cannot truthfully be completed by a dashboard button.</p></div></div>
+    <div class="operator-list">
+      <div class="operator-item"><span class="badge {{ 'badge-green' if (alerts.root_recovery or {}).status == 'clear' else 'badge-amber' }}">Root recovery</span><span>{{ (alerts.root_recovery or {}).detail }}</span></div>
+      <div class="operator-item"><span class="badge {{ 'badge-green' if (alerts.failed_units or {}).status == 'clear' else 'badge-amber' }}">Failed units</span><span>{{ (alerts.failed_units or {}).units|join(', ') if (alerts.failed_units or {}).units else 'None' }}</span></div>
+      <div class="operator-item"><span class="badge badge-blue">Agency tools</span><span>GA4, GSC, DNS providers, and similar integrations belong in the <a href="/tools">Tools library</a>, where setup state and required human input stay visible.</span></div>
+    </div>
+  </section>
+
+  <div class="snapshot-note">Evidence generated {{ alerts.generated_at or 'unknown' }} · manual rechecks are silent · scheduled digests link back to this page</div>
+</div>

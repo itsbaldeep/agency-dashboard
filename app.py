@@ -21,6 +21,16 @@ TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]
 
+
+@app.context_processor
+def operator_context():
+    """Keep outstanding human chores visible from every dashboard page."""
+    first = request.path.strip("/").split("/", 1)[0] or "dashboard"
+    return {
+        "nav_alert_count": models.get_alert_nav_count(),
+        "active": "dashboard" if first == "dashboard" else first,
+    }
+
 @app.template_filter('jsonloads')
 def jsonloads_filter(val, key=None):
     if isinstance(val, str):
@@ -72,6 +82,18 @@ def fmt_dur(started, finished):
         return f"{m}m {s}s"
     h, m = divmod(m, 60)
     return f"{h}h {m}m"
+
+
+@app.template_filter("filesize")
+def filesize(value):
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or unit == "TiB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
 
 
 # ── Dashboard / Overview ────────────────────────────────────────
@@ -1252,8 +1274,8 @@ def operations_jobs():
 
 @app.route("/operations/approvals")
 def operations_approvals():
-    pending = models.get_approvals(pending_only=True)
-    history = models.get_approvals(pending_only=False)
+    pending = models.get_approvals(pending_only=True, core_only=True)
+    history = models.get_approvals(pending_only=False, core_only=True)
     return render_template("fragments/approvals_list.html", approvals=pending, all_approvals=history)
 
 
@@ -1292,6 +1314,79 @@ def approval_act(approval_id, decision):
     if ok:
         return jsonify({"ok": True, "task_id": int(msg) if msg.isdigit() else None})
     return jsonify({"ok": False, "error": msg}), 400
+
+
+# ── Alerts / Human Chores ─────────────────────────────────────
+
+ALERT_ACTIONS = {
+    "mark_offsite", "mark_credential", "verify_backup",
+    "recheck_all", "recheck_system", "recheck_credentials",
+}
+
+
+@app.route("/alerts")
+def alerts():
+    return render_template("alerts.html")
+
+
+@app.route("/alerts/data")
+def alerts_data():
+    return render_template("fragments/alerts.html", alerts=models.get_alert_state())
+
+
+@app.route("/api/alerts/actions", methods=["POST"])
+def alert_action():
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "")
+    if action not in ALERT_ACTIONS:
+        return jsonify({"ok": False, "error": "Unsupported alert action"}), 400
+
+    params = {"action": action, "silent": True}
+    if action == "mark_offsite":
+        if payload.get("confirmed") is not True:
+            return jsonify({"ok": False, "error": "Confirm the copied file and matching SHA-256 first"}), 400
+        params.update({"confirmed": True, "note": str(payload.get("note") or "")[:200]})
+    elif action == "mark_credential":
+        credential_id = str(payload.get("credential_id") or "")
+        valid_ids = {
+            str(item.get("id")) for item in models.get_alert_state().get("credentials", [])
+            if item.get("id")
+        }
+        if credential_id not in valid_ids:
+            return jsonify({"ok": False, "error": "Unknown credential reference"}), 400
+        params["credential_id"] = credential_id
+
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM tasks WHERE type='operator_chore' "
+            "AND status IN ('queued','running','needs_input') "
+            "AND params->>'action'=%s "
+            "AND COALESCE(params->>'credential_id','')=%s "
+            "ORDER BY id DESC LIMIT 1",
+            (action, params.get("credential_id", "")),
+        )
+        existing = cur.fetchone()
+        if existing:
+            return jsonify({"ok": True, "task_id": existing["id"], "deduplicated": True})
+        cur.execute(
+            "INSERT INTO tasks (type,status,params,triggered_by) "
+            "VALUES ('operator_chore','queued',%s,'dashboard-alerts') RETURNING id",
+            (json.dumps(params),),
+        )
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+        return jsonify({"ok": True, "task_id": task_id, "deduplicated": False})
+    finally:
+        conn.close()
+
+
+# ── Core Tools ────────────────────────────────────────────────
+
+@app.route("/tools")
+def tools_library():
+    return render_template("tools.html", tools=models.get_tools())
 
 
 # ── Health ──────────────────────────────────────────────────────

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header alerts-header">
+  <div>
+    <h1>Alerts</h1>
+    <div class="sub">Your human chore inbox — finish an item, then recheck it here</div>
+  </div>
+  <button class="btn" onclick="runAlertAction('recheck_all')">&#8635; Recheck everything</button>
+</div>
+
+<div id="alert-action-status" class="action-status" aria-live="polite"></div>
+<div id="alerts-main"
+     hx-get="/alerts/data"
+     hx-trigger="load, every 30s"
+     hx-select="#alerts-main"
+     hx-swap="outerHTML">
+  <div class="stats">
+    {% for _ in range(3) %}<div class="stat-card"><div class="skel skel-h"></div><div class="skel skel-s"></div></div>{% endfor %}
+  </div>
+  <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
+</div>
+
+<script>
+function setAlertStatus(message, kind) {
+  var el = document.getElementById('alert-action-status');
+  el.className = 'action-status show ' + (kind || 'working');
+  el.textContent = message;
+}
+function refreshAlerts() {
+  htmx.ajax('GET', '/alerts/data', {target:'#alerts-main', swap:'outerHTML'});
+}
+async function runAlertAction(action, extra) {
+  var body = Object.assign({action: action}, extra || {});
+  if (action === 'mark_offsite') {
+    var check = document.getElementById('backup-confirmed');
+    if (!check || !check.checked) {
+      setAlertStatus('Confirm that your laptop copy exists and its SHA-256 matches.', 'error');
+      return;
+    }
+    body.confirmed = true;
+    body.note = (document.getElementById('backup-note') || {}).value || '';
+  }
+  setAlertStatus('Queued. The worker is running a deterministic check…', 'working');
+  try {
+    var response = await fetch('/api/alerts/actions', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    });
+    var result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'Action could not be queued');
+    for (var i=0; i<90; i++) {
+      await new Promise(function(resolve){setTimeout(resolve, 1000)});
+      var taskResponse = await fetch('/api/tasks/' + result.task_id);
+      var task = await taskResponse.json();
+      if (task.status === 'done') {
+        setAlertStatus('Completed and rechecked. Refreshing the evidence…', 'success');
+        refreshAlerts();
+        return;
+      }
+      if (task.status === 'failed' || task.status === 'needs_input') {
+        throw new Error(task.error || task.progress_text || 'The check needs attention');
+      }
+    }
+    throw new Error('The check is still running. Its task remains visible in Tasks.');
+  } catch (error) {
+    setAlertStatus(error.message, 'error');
+    refreshAlerts();
+  }
+}
+async function copyCommand(button) {
+  var value = button.getAttribute('data-copy');
+  try {
+    await navigator.clipboard.writeText(value);
+    var old = button.textContent; button.textContent = 'Copied';
+    setTimeout(function(){button.textContent=old}, 1200);
+  } catch (_) {
+    window.prompt('Copy this command:', value);
+  }
+}
+</script>
+{% endblock %}

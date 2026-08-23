@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Tools</h1>
+  <div class="sub">The core agency tool registry — integrations we operate, their evidence, and the human input they need</div>
+</div>
+
+<div class="alert alert-blue mb-3"><strong>Boundary:</strong><span>This is for agency-wide infrastructure and reusable integrations. A client or engagement keeps its own credentials and access inside that engagement.</span></div>
+
+<div class="tool-grid">
+  {% for item in tools %}
+  <div class="tool-card {{ 'tool-needs-action' if item.human_action else '' }}" id="tool-{{ item.id }}">
+    <div class="card-header">
+      <div><span class="chore-kicker">{{ item.id }}</span><div class="card-title">{{ item.name }}</div></div>
+      <div class="gap-2">
+        <span class="badge {% if item.status in ('active','active_bounded') %}badge-green{% elif item.status == 'configured_unverified' %}badge-amber{% else %}badge-dim{% endif %}">{{ item.status }}</span>
+        <span class="badge {% if item.observed == 'healthy' %}badge-green{% elif item.observed in ('configured','operator','configured_unverified') %}badge-amber{% elif item.observed == 'down' %}badge-red{% else %}badge-dim{% endif %}">{{ item.observed }}</span>
+      </div>
+    </div>
+    <p>{{ item.role }}</p>
+    {% if item.human_action %}<div class="tool-action"><strong>Human input:</strong> {{ item.human_action }}</div>{% endif %}
+    {% if item.note %}<div class="subtle mt-2">{{ item.note }}</div>{% endif %}
+    <div class="gap-2 mt-3">
+      {% for ref in item.credential_refs %}<span class="badge badge-dim mono">{{ ref }}</span>{% else %}<span class="subtle">No credential reference</span>{% endfor %}
+    </div>
+  </div>
+  {% else %}<div class="card"><p class="empty">Core tool registry unavailable.</p></div>{% endfor %}
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-title">How this page relates to Alerts</span></div>
+  <p class="subtle">Tools answers “what capability exists and what access is missing.” Alerts is reserved for recurring chores and actionable failures. Adding GA4/GSC access is tool setup; rotating an existing agency credential is an alert.</p>
+</div>
+{% endblock %}
