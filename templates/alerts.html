@@ -5,7 +5,7 @@
     <h1>Alerts</h1>
     <div class="sub">Your human chore inbox — finish an item, then recheck it here</div>
   </div>
-  <button class="btn" onclick="runAlertAction('recheck_all')">&#8635; Recheck everything</button>
+  <button class="btn" onclick="runAlertAction('recheck_all',{},this)">&#8635; Recheck everything</button>
 </div>
 
 <div id="alert-action-status" class="action-status" aria-live="polite"></div>
@@ -29,7 +29,7 @@ function setAlertStatus(message, kind) {
 function refreshAlerts() {
   htmx.ajax('GET', '/alerts/data', {target:'#alerts-main', swap:'outerHTML'});
 }
-async function runAlertAction(action, extra) {
+async function runAlertAction(action, extra, trigger) {
   var body = Object.assign({action: action}, extra || {});
   if (action === 'mark_offsite') {
     var check = document.getElementById('backup-confirmed');
@@ -39,6 +39,11 @@ async function runAlertAction(action, extra) {
     }
     body.confirmed = true;
     body.note = (document.getElementById('backup-note') || {}).value || '';
+  }
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.dataset.originalText = trigger.textContent;
+    trigger.textContent = 'Working…';
   }
   setAlertStatus('Queued. The worker is running a deterministic check…', 'working');
   try {
@@ -64,6 +69,11 @@ async function runAlertAction(action, extra) {
   } catch (error) {
     setAlertStatus(error.message, 'error');
     refreshAlerts();
+  } finally {
+    if (trigger && document.body.contains(trigger)) {
+      trigger.disabled = false;
+      trigger.textContent = trigger.dataset.originalText || 'Retry';
+    }
   }
 }
 async function copyCommand(button) {
@@ -71,9 +81,12 @@ async function copyCommand(button) {
   try {
     await navigator.clipboard.writeText(value);
     var old = button.textContent; button.textContent = 'Copied';
+    setAlertStatus('Copied to clipboard.', 'success');
     setTimeout(function(){button.textContent=old}, 1200);
   } catch (_) {
-    window.prompt('Copy this command:', value);
+    var fallback = window.prompt('Copy this command:', value);
+    if (fallback !== null) setAlertStatus('Command shown for manual copying.', 'success');
+    else setAlertStatus('Copy cancelled.', 'error');
   }
 }
 </script>

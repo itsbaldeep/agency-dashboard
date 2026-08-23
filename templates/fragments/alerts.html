@@ -38,11 +38,11 @@
     <div class="command-row"><code>{{ backup.verify_command }}</code><button class="btn btn-sm" data-copy="{{ backup.verify_command|e }}" onclick="copyCommand(this)">Copy</button></div>
     <div class="checksum"><span>Expected SHA-256</span><code>{{ backup.sha256 }}</code><button class="btn btn-sm" data-copy="{{ backup.sha256|e }}" onclick="copyCommand(this)">Copy</button></div>
     <div class="chore-actions">
-      <button class="btn" onclick="runAlertAction('verify_backup')">Verify bundle on server</button>
+      <button class="btn" onclick="runAlertAction('verify_backup',{},this)">Verify bundle on server</button>
       {% if offsite.overdue %}
       <label class="confirm-row"><input type="checkbox" id="backup-confirmed"> <span>I copied this exact bundle to my laptop and its SHA-256 matched.</span></label>
       <input id="backup-note" class="note-input" placeholder="Optional note, e.g. laptop folder or external drive">
-      <button class="btn btn-primary" onclick="runAlertAction('mark_offsite')">Mark laptop copy complete</button>
+      <button class="btn btn-primary" onclick="runAlertAction('mark_offsite',{},this)">Mark laptop copy complete</button>
       {% else %}
       <span class="completion-note">Acknowledged {{ offsite.confirmed_on }}. The next weekly reminder starts {{ offsite.next_due }}.</span>
       {% endif %}
@@ -55,7 +55,7 @@
   <section class="chore-card {{ 'is-open' if (alerts.credential_summary or {}).open else 'is-clear' }}">
     <div class="chore-heading">
       <div><span class="chore-kicker">Security</span><h2>Core credential rotation</h2><p>Names and evidence only—secret values are never sent to this page. Client and engagement credentials are outside this core registry.</p></div>
-      <div class="gap-2"><span class="badge badge-amber">{{ (alerts.credential_summary or {}).open or 0 }} open</span><button class="btn btn-sm" onclick="runAlertAction('recheck_credentials')">Recheck credentials</button></div>
+      <div class="gap-2"><span class="badge badge-amber">{{ (alerts.credential_summary or {}).open or 0 }} open</span><button class="btn btn-sm" onclick="runAlertAction('recheck_credentials',{},this)">Recheck credentials</button></div>
     </div>
     <div class="table-wrap"><table class="credential-table">
       <tr><th>Credential</th><th>Source</th><th>Evidence</th><th>What you do</th><th></th></tr>
@@ -72,7 +72,7 @@
         <td>{{ item.next_action }}{% if item.command %}<div class="mini-command"><code>{{ item.command }}</code><button class="btn btn-xs" data-copy="{{ item.command|e }}" onclick="copyCommand(this)">Copy</button></div>{% endif %}</td>
         <td>
           {% if not item.placeholder_like and not item.human_rotated_at %}
-          <button class="btn btn-sm btn-green" onclick="runAlertAction('mark_credential',{credential_id:{{ item.id|tojson }}})">Mark rotated</button>
+          <button class="btn btn-sm btn-green" data-credential-id="{{ item.id }}" onclick="runAlertAction('mark_credential',{credential_id:this.dataset.credentialId},this)">Mark rotated</button>
           {% elif item.placeholder_like %}
           <span class="subtle">Replace first</span>
           {% else %}<span class="severity-green">Done</span>{% endif %}
@@ -85,7 +85,7 @@
   <section class="chore-card {{ 'is-open' if maintenance.status != 'clear' else 'is-clear' }}">
     <div class="chore-heading">
       <div><span class="chore-kicker">Host maintenance</span><h2>Packages and kernel</h2><p>The dashboard audits and explains this chore. It deliberately does not run sudo upgrades or reboot the VPS.</p></div>
-      <div class="gap-2"><span class="badge {{ 'badge-red' if maintenance.reboot_required else ('badge-amber' if maintenance.upgradable_count else 'badge-green') }}">{{ maintenance.upgradable_count or 0 }} updates{% if maintenance.reboot_required %} · reboot required{% endif %}</span><button class="btn btn-sm" onclick="runAlertAction('recheck_system')">Recheck system</button></div>
+      <div class="gap-2"><span class="badge {{ 'badge-red' if maintenance.reboot_required else ('badge-amber' if maintenance.upgradable_count else 'badge-green') }}">{{ maintenance.upgradable_count or 0 }} updates{% if maintenance.reboot_required %} · reboot required{% endif %}</span><button class="btn btn-sm" onclick="runAlertAction('recheck_system',{},this)">Recheck system</button></div>
     </div>
     <div class="evidence-grid">
       <div><span>Running kernel</span><strong class="mono">{{ maintenance.current_kernel or 'unknown' }}</strong></div>

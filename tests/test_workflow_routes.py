@@ -99,6 +99,29 @@ class WorkflowRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Snapshot unavailable", response.data)
 
+    def test_alert_credential_button_uses_safe_data_attribute(self):
+        snapshot = {
+            "summary": {"open_count": 1, "critical_count": 0, "clear_count": 4},
+            "backup": {"status": "clear", "offsite": {"overdue": False}},
+            "credentials": [{
+                "id": "core.env:DEEPSEEK_API_KEY", "name": "DEEPSEEK_API_KEY",
+                "source_path": "/home/agency/.config/agency/core.env",
+                "placeholder_like": False, "human_rotated_at": None,
+                "next_action": "Acknowledge after human rotation.",
+            }],
+            "credential_summary": {"open": 1},
+            "maintenance": {"status": "clear", "upgradable_count": 0,
+                             "reboot_required": False, "commands": []},
+            "root_recovery": {"status": "clear", "detail": "clear"},
+            "failed_units": {"status": "clear", "units": []},
+            "generated_at": "2026-08-23T00:00:00+00:00",
+        }
+        with mock.patch.object(dashboard.models, "get_alert_state", return_value=snapshot):
+            response = self.client.get("/alerts/data")
+        html = response.data.decode()
+        self.assertIn('data-credential-id="core.env:DEEPSEEK_API_KEY"', html)
+        self.assertNotIn('credential_id:"core.env:DEEPSEEK_API_KEY"', html)
+
     def test_alert_action_is_whitelisted_and_silent(self):
         conn = FakeConnection([None, {"id": 77}])
         with mock.patch.object(dashboard.models, "db", return_value=conn):
@@ -108,6 +131,21 @@ class WorkflowRouteTests(unittest.TestCase):
         insert = next(params for sql, params in conn.cursor_value.calls if sql.startswith("INSERT INTO tasks"))
         self.assertEqual(json.loads(insert[0]), {"action": "recheck_system", "silent": True})
         self.assertEqual(conn.commits, 1)
+
+    def test_mark_credential_action_queues_the_safe_identifier(self):
+        conn = FakeConnection([None, {"id": 78}])
+        snapshot = {"credentials": [{"id": "core.env:DEEPSEEK_API_KEY"}]}
+        with mock.patch.object(dashboard.models, "db", return_value=conn), \
+             mock.patch.object(dashboard.models, "get_alert_state", return_value=snapshot):
+            response = self.client.post(
+                "/api/alerts/actions",
+                json={"action": "mark_credential", "credential_id": "core.env:DEEPSEEK_API_KEY"},
+            )
+        self.assertEqual(response.status_code, 200)
+        insert = next(params for sql, params in conn.cursor_value.calls if sql.startswith("INSERT INTO tasks"))
+        self.assertEqual(json.loads(insert[0]), {
+            "action": "mark_credential", "credential_id": "core.env:DEEPSEEK_API_KEY", "silent": True,
+        })
 
     def test_alert_action_rejects_shell_and_unconfirmed_backup(self):
         shell = self.client.post("/api/alerts/actions", json={"action": "run_shell"})
