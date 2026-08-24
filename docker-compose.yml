@@ -3,6 +3,8 @@ services:
     build: .
     command: ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--threads", "4", "--timeout", "60", "app:app"]
     container_name: agency-dashboard
+    group_add:
+      - "1001"
     restart: unless-stopped
     networks:
       - net-control
