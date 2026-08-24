@@ -165,6 +165,35 @@ def get_agent_trace_view(limit=40):
 
 
 def get_agent_alerts():
+    """Read the durable attention index; recent traces are a compatibility fallback."""
+    path = Path(AGENT_TRACE_DIR) / "attention.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("attention index must be an object")
+        alerts = payload.get("alerts")
+        if not isinstance(alerts, dict):
+            raise ValueError("attention alerts must be an object")
+        values = []
+        for row in alerts.values():
+            if not isinstance(row, dict) or not row.get("trace_id"):
+                continue
+            values.append({
+                "trace_id": str(row["trace_id"]),
+                "started_at": row.get("ts"),
+                "updated_at": row.get("ts"),
+                "status": "needs_human",
+                "model": "",
+                "cwd": "",
+                "summary": str(row.get("summary") or "")[:600],
+                "refs": list(row.get("refs") or [])[:10],
+                "workers": 0,
+                "tools": 0,
+                "severity": row.get("severity") or "warning",
+            })
+        return sorted(values, key=lambda item: item["updated_at"] or "", reverse=True)
+    except (OSError, ValueError, TypeError):
+        pass
     return [
         item for item in get_agent_trace_view(limit=100)["traces"]
         if item["status"] == "needs_human"

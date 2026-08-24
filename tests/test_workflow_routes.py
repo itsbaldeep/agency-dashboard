@@ -198,6 +198,38 @@ class WorkflowRouteTests(unittest.TestCase):
                 alerts = dashboard.models.get_agent_alerts()
         self.assertEqual([item["trace_id"] for item in alerts], ["atr_two"])
 
+    def test_agent_alert_reads_durable_attention_index(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "attention.json"
+            path.write_text(json.dumps({
+                "v": 1,
+                "updated_at": "2026-08-24T00:00:00.000Z",
+                "alerts": {
+                    "atr_old": {
+                        "ts": "2020-01-01T00:00:00.000Z",
+                        "trace_id": "atr_old",
+                        "status": "needs_human",
+                        "severity": "warning",
+                        "summary": "Still needs a human after the raw trace window",
+                        "refs": ["dashboard:/alerts"],
+                    }
+                },
+            }))
+            with mock.patch.object(dashboard.models, "AGENT_TRACE_DIR", root):
+                alerts = dashboard.models.get_agent_alerts()
+        self.assertEqual([item["trace_id"] for item in alerts], ["atr_old"])
+        self.assertEqual(alerts[0]["status"], "needs_human")
+
+    def test_invalid_attention_shape_falls_back_to_recent_traces(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "attention.json").write_text("null\n")
+            with mock.patch.object(dashboard.models, "AGENT_TRACE_DIR", root), \
+                 mock.patch.object(dashboard.models, "get_agent_trace_view", return_value={
+                     "traces": [{"trace_id": "atr_fallback", "status": "needs_human"}]
+                 }):
+                alerts = dashboard.models.get_agent_alerts()
+        self.assertEqual([item["trace_id"] for item in alerts], ["atr_fallback"])
+
 
 if __name__ == "__main__":
     unittest.main()
