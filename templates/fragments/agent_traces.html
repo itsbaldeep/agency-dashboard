@@ -1,0 +1,30 @@
+<div id="agent-traces-main"
+     hx-get="/operations/agent-traces"
+     hx-trigger="every 5s"
+     hx-select="#agent-traces-main"
+     hx-swap="outerHTML">
+  <div class="stats">
+    <div class="stat-card"><div class="stat-value" style="color:var(--accent)">{{ data.working }}</div><div class="stat-label">Working</div><div class="stat-sub">current prompt traces</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:{{ 'var(--red)' if data.needs_human else 'var(--green)' }}">{{ data.needs_human }}</div><div class="stat-label">Need human</div><div class="stat-sub">also shown in Alerts</div></div>
+    <div class="stat-card"><div class="stat-value">{{ data.worker_count }}</div><div class="stat-label">Workers</div><div class="stat-sub">recent Luna starts</div></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">Agent traces</span><span class="subtle">Secret-free metadata and curated summaries; reverify before acting</span></div>
+    <div class="table-wrap"><table>
+      <tr><th>Updated UTC</th><th>Status</th><th>Trace</th><th>Model</th><th>Workers / tools</th><th>Summary / references</th></tr>
+      {% for item in data.traces %}
+      <tr>
+        <td class="mono subtle">{{ (item.updated_at or '')[:19]|replace('T',' ') }}</td>
+        <td><span class="badge {{ 'needs_input' if item.status == 'needs_human' else ('running' if item.status == 'working' else 'completed') }}">{{ item.status|replace('_',' ') }}</span></td>
+        <td><code>{{ item.trace_id }}</code>{% if item.cwd %}<div class="subtle mono">{{ item.cwd }}</div>{% endif %}</td>
+        <td class="mono">{{ item.model or 'unknown' }}</td>
+        <td class="mono">{{ item.workers }} / {{ item.tools }}</td>
+        <td>{% if item.summary %}<strong>{{ item.summary }}</strong>{% endif %}
+          {% for ref in item.refs %}<div class="mono subtle">{{ ref }}</div>{% endfor %}
+          {% if not item.summary %}<span class="subtle">Lifecycle only; no curated result yet.</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}<tr><td colspan="6"><p class="empty">No agent traces yet. Trust the Codex hook once from <code>/hooks</code>, or start a new OpenCode session.</p></td></tr>{% endfor %}
+    </table></div>
+  </div>
+</div>

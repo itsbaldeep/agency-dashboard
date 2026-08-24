@@ -20,6 +20,24 @@
     <div class="stat-card"><div class="stat-value" style="color:var(--green)">{{ summary.clear_count or 0 }}</div><div class="stat-label">Clear groups</div><div class="stat-sub">based on current evidence</div></div>
   </div>
 
+  {% if alerts.agent_alerts %}
+  <section class="chore-card is-open">
+    <div class="chore-heading">
+      <div><span class="chore-kicker">Agent work</span><h2>Decisions and blockers</h2><p>Bounded agent summaries only. Respond in Codex/OpenCode or the linked Lavish review; a later verified result resolves the trace.</p></div>
+      <span class="badge badge-red">{{ alerts.agent_alerts|length }} need human</span>
+    </div>
+    <div class="operator-list">
+      {% for item in alerts.agent_alerts %}
+      <div class="operator-item">
+        <span class="badge {{ 'badge-red' if item.severity == 'urgent' else 'badge-amber' }}">{{ item.severity }}</span>
+        <span><strong>{{ item.summary or 'Agent requested human input' }}</strong><span class="mono subtle"> · {{ item.trace_id }}</span>
+        {% for ref in item.refs %}<div class="mono subtle">{{ ref }}</div>{% endfor %}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
   <section class="chore-card {{ 'is-open' if backup.status != 'clear' else 'is-clear' }}">
     <div class="chore-heading">
       <div><span class="chore-kicker">Recovery</span><h2>Laptop backup copy</h2><p>Server creates the bundle daily. Once each Saturday, copy the latest bundle to your laptop and verify its checksum.</p></div>

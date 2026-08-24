@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -90,7 +91,7 @@ class WorkflowRouteTests(unittest.TestCase):
         self.assertEqual(inserts, [])
 
     def test_alert_fragment_renders_when_snapshot_is_unavailable(self):
-        with mock.patch.object(dashboard.models, "get_alert_state", return_value={
+        with mock.patch.object(dashboard.models, "get_combined_alert_state", return_value={
             "stale": True,
             "summary": {"open_count": 1, "critical_count": 1, "clear_count": 0},
             "error": "snapshot unavailable",
@@ -116,7 +117,7 @@ class WorkflowRouteTests(unittest.TestCase):
             "failed_units": {"status": "clear", "units": []},
             "generated_at": "2026-08-23T00:00:00+00:00",
         }
-        with mock.patch.object(dashboard.models, "get_alert_state", return_value=snapshot):
+        with mock.patch.object(dashboard.models, "get_combined_alert_state", return_value=snapshot):
             response = self.client.get("/alerts/data")
         html = response.data.decode()
         self.assertIn('data-credential-id="core.env:DEEPSEEK_API_KEY"', html)
@@ -152,6 +153,50 @@ class WorkflowRouteTests(unittest.TestCase):
         backup = self.client.post("/api/alerts/actions", json={"action": "mark_offsite"})
         self.assertEqual(shell.status_code, 400)
         self.assertEqual(backup.status_code, 400)
+
+    def test_agent_trace_fragment_renders_only_redacted_summary(self):
+        data = {
+            "working": 1,
+            "needs_human": 1,
+            "worker_count": 2,
+            "generated_at": "2026-08-24T00:00:00+00:00",
+            "traces": [{
+                "trace_id": "atr_test",
+                "updated_at": "2026-08-24T00:00:00Z",
+                "status": "needs_human",
+                "severity": "urgent",
+                "model": "gpt-5.6-sol",
+                "cwd": "/home/agency",
+                "workers": 2,
+                "tools": 4,
+                "summary": "Choose the deployment window",
+                "refs": ["/home/agency/core/agency-os/ROADMAP.md"],
+            }],
+        }
+        with mock.patch.object(dashboard.models, "get_agent_trace_view", return_value=data):
+            response = self.client.get("/operations/agent-traces")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Choose the deployment window", response.data)
+        self.assertIn(b"atr_test", response.data)
+
+    def test_agent_alert_is_cleared_by_later_verified_result(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "2026-08-24.jsonl"
+            rows = [
+                {"ts": "2026-08-24T00:00:00Z", "trace_id": "atr_one",
+                 "kind": "alert", "status": "needs_human", "severity": "urgent",
+                 "summary": "Choose a window"},
+                {"ts": "2026-08-24T00:01:00Z", "trace_id": "atr_one",
+                 "kind": "result", "status": "verified", "severity": "info",
+                 "summary": "Window confirmed"},
+                {"ts": "2026-08-24T00:02:00Z", "trace_id": "atr_two",
+                 "kind": "alert", "status": "needs_human", "severity": "warning",
+                 "summary": "Grant property access"},
+            ]
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            with mock.patch.object(dashboard.models, "AGENT_TRACE_DIR", root):
+                alerts = dashboard.models.get_agent_alerts()
+        self.assertEqual([item["trace_id"] for item in alerts], ["atr_two"])
 
 
 if __name__ == "__main__":

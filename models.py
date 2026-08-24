@@ -1,8 +1,10 @@
 import json
 import os
 import re
+from collections import deque
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
@@ -18,6 +20,7 @@ CH_USER = os.environ.get("CH_USER", "agency")
 CH_PASS = os.environ.get("CH_PASS") or os.environ.get("CLICKHOUSE_PASSWORD")
 HOST_STATE_PATH = os.environ.get("AGENCY_HOST_STATE", "/agency-state/host-health.json")
 ALERT_STATE_PATH = os.environ.get("AGENCY_ALERT_STATE", "/agency-state/alerts.json")
+AGENT_TRACE_DIR = os.environ.get("AGENCY_AGENT_TRACE_DIR", "/agency-state/agent-traces")
 
 
 def db():
@@ -88,8 +91,101 @@ def get_alert_state():
         }
 
 
+def _agent_trace_rows(days=7, max_rows=2000):
+    """Read bounded, already-redacted lifecycle metadata from recent JSONL files."""
+    root = Path(AGENT_TRACE_DIR)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).date().isoformat()
+    rows = []
+    try:
+        paths = sorted(root.glob("????-??-??.jsonl"), reverse=True)
+    except OSError:
+        return []
+    for path in paths:
+        if path.stem < cutoff or len(rows) >= max_rows:
+            continue
+        try:
+            with path.open(encoding="utf-8") as handle:
+                lines = deque(handle, maxlen=max_rows - len(rows))
+            for line in lines:
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(row, dict) and row.get("trace_id") and row.get("ts"):
+                    rows.append(row)
+        except OSError:
+            continue
+    return sorted(rows, key=lambda row: str(row.get("ts") or ""), reverse=True)[:max_rows]
+
+
+def get_agent_trace_view(limit=40):
+    rows = _agent_trace_rows()
+    grouped = {}
+    for row in reversed(rows):
+        tid = str(row.get("trace_id") or "")
+        item = grouped.setdefault(tid, {
+            "trace_id": tid,
+            "started_at": row.get("ts"),
+            "updated_at": row.get("ts"),
+            "status": "working",
+            "model": row.get("model") or "",
+            "cwd": row.get("cwd") or "",
+            "summary": "",
+            "refs": [],
+            "workers": 0,
+            "tools": 0,
+            "severity": "info",
+        })
+        item["updated_at"] = row.get("ts") or item["updated_at"]
+        item["model"] = row.get("model") or item["model"]
+        item["cwd"] = row.get("cwd") or item["cwd"]
+        kind = row.get("kind")
+        if kind == "SubagentStart":
+            item["workers"] += 1
+        elif kind == "PostToolUse":
+            item["tools"] += 1
+        if row.get("summary"):
+            item["summary"] = row["summary"]
+            item["refs"] = row.get("refs") or []
+            item["severity"] = row.get("severity") or item["severity"]
+        if kind == "alert" and row.get("status") not in ("resolved", "done", "complete"):
+            item["status"] = "needs_human"
+        elif kind in ("result", "decision") and row.get("status") in ("resolved", "done", "complete", "verified"):
+            item["status"] = row.get("status")
+        elif kind == "Stop" and item["status"] == "working":
+            item["status"] = "complete"
+    traces = sorted(grouped.values(), key=lambda item: item["updated_at"] or "", reverse=True)[:limit]
+    return {
+        "traces": traces,
+        "working": sum(1 for item in traces if item["status"] == "working"),
+        "needs_human": sum(1 for item in traces if item["status"] == "needs_human"),
+        "worker_count": sum(item["workers"] for item in traces),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def get_agent_alerts():
+    return [
+        item for item in get_agent_trace_view(limit=100)["traces"]
+        if item["status"] == "needs_human"
+    ]
+
+
+def get_combined_alert_state():
+    payload = get_alert_state()
+    alerts = get_agent_alerts()
+    payload["agent_alerts"] = alerts
+    summary = dict(payload.get("summary") or {})
+    summary["open_count"] = int(summary.get("open_count") or 0) + len(alerts)
+    summary["critical_count"] = int(summary.get("critical_count") or 0) + sum(
+        1 for item in alerts if item.get("severity") == "urgent"
+    )
+    payload["summary"] = summary
+    return payload
+
+
 def get_alert_nav_count():
-    summary = get_alert_state().get("summary") or {}
+    summary = get_combined_alert_state().get("summary") or {}
     try:
         return max(0, int(summary.get("open_count") or 0))
     except (TypeError, ValueError):

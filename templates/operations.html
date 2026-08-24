@@ -14,6 +14,7 @@
   <a href="#jobs" class="active" onclick="switchTab(event,'jobs')">Jobs</a>
   <a href="#approvals" onclick="switchTab(event,'approvals')">Core Approvals</a>
   <a href="#runs" onclick="switchTab(event,'runs')">Job Runs</a>
+  <a href="#agents" onclick="switchTab(event,'agents')">Agent Work</a>
 </div>
 
 <div id="tab-jobs" class="tab-content">
@@ -41,6 +42,16 @@
        hx-get="/operations/job-runs"
        hx-trigger="load, every 15s"
        hx-select="#runs-main"
+       hx-swap="outerHTML">
+    <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
+  </div>
+</div>
+
+<div id="tab-agents" class="tab-content" style="display:none">
+  <div id="agent-traces-main"
+       hx-get="/operations/agent-traces"
+       hx-trigger="load, every 5s"
+       hx-select="#agent-traces-main"
        hx-swap="outerHTML">
     <div class="card"><div class="skel skel-h"></div><div class="skel skel-block"></div></div>
   </div>

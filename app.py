@@ -1286,6 +1286,11 @@ def job_runs():
     return render_template("fragments/job_runs.html", runs=runs)
 
 
+@app.route("/operations/agent-traces")
+def agent_traces():
+    return render_template("fragments/agent_traces.html", data=models.get_agent_trace_view())
+
+
 @app.route("/operations/jobs/<int:job_id>/toggle", methods=["POST"])
 def job_toggle(job_id):
     conn = models.db()
@@ -1331,7 +1336,7 @@ def alerts():
 
 @app.route("/alerts/data")
 def alerts_data():
-    return render_template("fragments/alerts.html", alerts=models.get_alert_state())
+    return render_template("fragments/alerts.html", alerts=models.get_combined_alert_state())
 
 
 @app.route("/api/alerts/actions", methods=["POST"])
