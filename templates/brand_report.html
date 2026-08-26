@@ -39,11 +39,68 @@
   </div>
 </div>
 
-{% if not audit %}
+<div class="report-section">
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">SEO Measurement</span>
+    <button class="btn btn-sm btn-primary" type="button" onclick="queueSeoMeasurement()">Run fresh measurement</button>
+  </div>
+  {% if seo_audit %}
+  {% set seo_sources = seo_data.get('sources') or {} %}
+  {% set crawl = seo_sources.get('crawl') or {} %}
+  {% set pagespeed = seo_sources.get('pagespeed') or {} %}
+  {% set gsc = seo_sources.get('gsc') or {} %}
+  {% set ga4 = seo_sources.get('ga4') or {} %}
+  {% set seo_statuses = seo_summary.get('source_statuses') or {} %}
+  {% set gsc_status = gsc.get('status') or seo_statuses.get('gsc') %}
+  {% set ga4_status = ga4.get('status') or seo_statuses.get('ga4') %}
+  {% set seo_counts = seo_summary.get('counts') or seo_data.get('counts') or {} %}
+  {% set comparison = seo_summary.get('comparison') or seo_data.get('comparison') or {} %}
+  {% set crawl_bound = crawl.get('bounded') or {} %}
+  {% set page_metrics = pagespeed.get('core_web_vitals') or {} %}
+  {% set gsc_query = gsc.get('query') or {} %}
+  {% set ga4_traffic = (ga4.get('traffic') or {}).get('totals') or {} %}
+  {% set ga4_leads = (ga4.get('generate_lead') or {}).get('totals') or {} %}
+  <div class="subtle mb-2">Run <span class="mono">{{ seo_data.get('run_id') or '—' }}</span> · {{ seo_data.get('captured_at') or seo_audit.created_at or '—' }}</div>
+  <div class="chips">
+    {% for name, key, source in [('Crawl', 'crawl', crawl), ('PageSpeed', 'pagespeed', pagespeed), ('GSC', 'gsc', gsc), ('GA4', 'ga4', ga4)] %}
+    <span class="pill"><span class="pill-label">{{ name }}</span>{{ source.get('status') or seo_statuses.get(key) or 'unavailable' }}</span>
+    {% endfor %}
+    <span class="pill"><span class="pill-label">Pages</span>{{ seo_counts.get('pages', crawl.get('pages')|length if crawl.get('pages') is sequence and crawl.get('pages') is not string else 0) }}</span>
+    <span class="pill"><span class="pill-label">Broken</span>{{ seo_counts.get('broken_links', crawl.get('broken_links')|length if crawl.get('broken_links') is sequence and crawl.get('broken_links') is not string else 0) }}</span>
+    <span class="pill"><span class="pill-label">Findings</span>{{ seo_counts.get('findings', seo_data.get('findings')|length if seo_data.get('findings') is sequence and seo_data.get('findings') is not string else 0) }}</span>
+  </div>
+  <div class="metrics-grid mt-2">
+    <div class="metric"><span class="metric-label">Crawl bound</span><span>{{ crawl_bound.get('max_pages', '—') }} pages max{% if crawl_bound.get('page_cap_reached') %} · cap reached, {{ crawl_bound.get('queued_count', 0) }} queued{% endif %}</span></div>
+    <div class="metric"><span class="metric-label">Mobile PageSpeed</span><span>{% if pagespeed.get('performance_score') is not none %}{{ (pagespeed.get('performance_score')|float * 100)|round|int }}%{% else %}unavailable{% endif %}</span></div>
+    <div class="metric"><span class="metric-label">LCP / CLS / TBT</span><span>{{ page_metrics.get('largest-contentful-paint', '—') }} / {{ page_metrics.get('cumulative-layout-shift', '—') }} / {{ page_metrics.get('total-blocking-time', '—') }}</span></div>
+    <div class="metric"><span class="metric-label">GSC</span><span>{% if gsc_status in ['available', 'partial', 'ok'] %}{{ gsc_query.get('clicks', 0) }} clicks · {{ gsc_query.get('impressions', 0) }} impressions · {{ (gsc_query.get('ctr', 0)|float * 100)|round(2) }}% CTR · {{ gsc_query.get('weighted_average_position', '—') }} position{% else %}unavailable{% endif %}</span></div>
+    <div class="metric"><span class="metric-label">GA4</span><span>{% if ga4_status in ['available', 'partial', 'ok'] %}{{ ga4_traffic.get('sessions', 0) }} sessions · {{ ga4_traffic.get('totalUsers', 0) }} users · {{ ga4_traffic.get('keyEvents', 0) }} key events · {{ ga4_leads.get('eventCount', 0) }} generate_lead{% else %}unavailable{% endif %}</span></div>
+    <div class="metric"><span class="metric-label">Finding comparison</span><span>+{{ comparison.get('finding_ids_added', [])|length }} added · {{ comparison.get('finding_ids_resolved', [])|length }} resolved</span></div>
+  </div>
+  {% if crawl.get('pages') %}
+  <details class="mt-2"><summary class="subtle" style="cursor:pointer">Crawl pages (up to 50)</summary>
+    <div class="table-wrap mt-1"><table><thead><tr><th>URL</th><th>Status</th><th>Title</th><th>H1s</th><th>Canonical</th><th>Schema</th><th>Sitemap</th></tr></thead><tbody>
+    {% for page in crawl.get('pages', [])[:50] %}{% set fields = page.get('fields') or {} %}<tr><td class="detail-cell">{{ page.get('url', '—') }}</td><td>{{ page.get('status', '—') }}</td><td class="detail-cell">{{ fields.get('title', '—') }}</td><td>{{ fields.get('h1_count', '—') }}</td><td class="detail-cell">{{ fields.get('canonical', '—') }}</td><td>{{ fields.get('jsonld_valid_count', 0) }}/{{ fields.get('jsonld_count', 0) }} valid</td><td>{{ fields.get('sitemap_member', false) }}</td></tr>{% endfor %}
+    </tbody></table></div>
+  </details>
+  {% endif %}
+  {% if seo_data.get('findings') %}
+  <details class="mt-2"><summary class="subtle" style="cursor:pointer">Findings (up to 50)</summary>
+    <div class="table-wrap mt-1"><table><thead><tr><th>Evidence ID</th><th>Rule</th><th>URL</th><th>Observed</th><th>Expected</th></tr></thead><tbody>
+    {% for finding in seo_data.get('findings', [])[:50] %}<tr><td class="mono">{{ finding.get('evidence_id', finding.get('id', '—')) }}</td><td>{{ finding.get('rule', '—') }}</td><td class="detail-cell">{{ finding.get('url', '—') }}</td><td class="detail-cell">{{ finding.get('observed', '—') }}</td><td class="detail-cell">{{ finding.get('expected', '—') }}</td></tr>{% endfor %}
+    </tbody></table></div>
+  </details>
+  {% endif %}
+  {% else %}<p class="empty">No SEO measurement yet. Stored domain and project eligibility are required.</p>{% endif %}
+</div></div>
+
+{% if not audit and not seo_audit %}
 <div class="card"><p class="empty">No audit yet — run one from the engagement page first.</p></div>
 {% else %}
 
 {# ── Section 1: Executive Summary ── #}
+{% if audit %}
 <div class="report-section">
 <div class="card">
   <div class="card-title mb-2">Executive Summary</div>
@@ -104,6 +161,7 @@
   {% endif %}
 </div>
 </div>
+{% endif %}
 
 {# ── Section 2: Capabilities Checklist ── #}
 <div class="report-section">
@@ -474,7 +532,7 @@
         {% for a in audit_history %}
         <tr>
           <td class="mono subtle">{{ a.created_fmt }}</td>
-          <td class="mono">{{ a.audit_type }}</td>
+           <td class="mono">{% if a.audit_type == 'seo_measurement' %}SEO Measurement{% else %}{{ a.audit_type|replace('_', ' ')|title }}{% endif %}</td>
           <td>
             {% set v = a.vis_pct %}
             {% if v is not none and v != '' %}
@@ -583,6 +641,17 @@ function rptImpl(form, sid) {
       else { alert('Failed: '+(d.error||'unknown')); }
     }).catch(e => alert('Error: '+e.message));
   return false;
+}
+async function queueSeoMeasurement() {
+  var button = document.querySelector('[onclick="queueSeoMeasurement()"]');
+  if (button) button.disabled = true;
+  try {
+    var response = await fetch('/api/brands/{{ brand.id }}/seo-measurement', {method:'POST'});
+    var data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to queue measurement');
+    alert(data.deduplicated ? 'Measurement already queued (task #'+data.task_id+')' : 'Measurement queued (task #'+data.task_id+')');
+  } catch (error) { alert(error.message); }
+  finally { if (button) button.disabled = false; }
 }
 </script>
 {% endblock %}

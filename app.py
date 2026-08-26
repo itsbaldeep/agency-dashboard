@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -185,7 +186,7 @@ def brand_report(brand_id):
         brand_properties = cur.fetchall()
 
         if project_id:
-            cur.execute("SELECT agent_allowed, repo_url FROM projects WHERE id=%s", (project_id,))
+            cur.execute("SELECT agent_allowed, repo_url, lifecycle, state FROM projects WHERE id=%s", (project_id,))
             prow = cur.fetchone()
             if prow:
                 agent_allowed = bool(prow.get("agent_allowed"))
@@ -198,8 +199,11 @@ def brand_report(brand_id):
             "FROM competitors c WHERE c.brand_id=%s ORDER BY c.domain", (brand_id,))
         competitors = cur.fetchall()
 
-        cur.execute("SELECT * FROM audits WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        cur.execute("SELECT * FROM audits WHERE brand_id=%s AND audit_type <> 'seo_measurement' ORDER BY created_at DESC LIMIT 1", (brand_id,))
         audit = cur.fetchone()
+
+        cur.execute("SELECT * FROM audits WHERE brand_id=%s AND audit_type='seo_measurement' ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        seo_audit = cur.fetchone()
 
         cur.execute(
             "SELECT id, audit_type, created_at, summary->>'brand_share_of_voice_pct' as vis_pct, "
@@ -216,6 +220,13 @@ def brand_report(brand_id):
         audit_sources = _parse_jsonb(audit.get("sources")) or []
         if not isinstance(audit_sources, list):
             audit_sources = []
+
+    seo_summary = _parse_jsonb(seo_audit.get("summary")) if seo_audit else {}
+    seo_data = _parse_jsonb(seo_audit.get("raw_data")) if seo_audit else {}
+    if not isinstance(seo_summary, dict):
+        seo_summary = {}
+    if not isinstance(seo_data, dict):
+        seo_data = {}
 
     capabilities = []
     if project_id:
@@ -347,6 +358,7 @@ def brand_report(brand_id):
                            brand=brand, brand_properties=brand_properties,
                            domain=domain, competitors=competitors, audit=audit,
                            audit_summary=audit_summary, audit_sources=audit_sources,
+                           seo_audit=seo_audit, seo_summary=seo_summary, seo_data=seo_data,
                            audit_history=audit_history, audit_date_fmt=audit_date_fmt,
                            suggestions=suggestions, visibility_rows=visibility_rows,
                            ch_error=ch_error, capabilities=capabilities,
@@ -356,6 +368,71 @@ def brand_report(brand_id):
                            agent_allowed=agent_allowed, repo_url=repo_url,
                            project_id=project_id,
                            summary_json=json.dumps(audit_summary, indent=2, default=str) if audit_summary else "")
+
+
+@app.route("/api/brands/<int:brand_id>/seo-measurement", methods=["POST"])
+def enqueue_seo_measurement(brand_id):
+    """Queue one measurement using only the brand's stored, approved properties."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, project_id FROM brands WHERE id=%s FOR UPDATE", (brand_id,))
+        brand = cur.fetchone()
+        if not brand:
+            return jsonify({"ok": False, "error": "Brand not found"}), 404
+        project_id = brand.get("project_id")
+        if not project_id:
+            return jsonify({"ok": False, "error": "Brand has no project"}), 400
+
+        cur.execute("SELECT id, lifecycle, state FROM projects WHERE id=%s", (project_id,))
+        project = cur.fetchone()
+        if not project:
+            return jsonify({"ok": False, "error": "Project not found"}), 400
+        if project.get("lifecycle") != "active":
+            return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
+        if project.get("state") not in {"scaffolded", "building", "preview", "staged", "live"}:
+            return jsonify({"ok": False, "error": "Project is not eligible for measurement"}), 409
+
+        cur.execute("SELECT property_type, value FROM brand_properties WHERE brand_id=%s", (brand_id,))
+        properties = {p.get("property_type"): p.get("value") for p in cur.fetchall()}
+        domain_value = str(properties.get("domain") or "").strip()
+        if not domain_value:
+            return jsonify({"ok": False, "error": "Domain property is required"}), 400
+        parsed = urlparse(domain_value if "://" in domain_value else "https://" + domain_value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password:
+            return jsonify({"ok": False, "error": "Stored domain property is invalid"}), 400
+        try:
+            parsed_port = parsed.port
+        except ValueError:
+            return jsonify({"ok": False, "error": "Stored domain property is invalid"}), 400
+        if parsed_port is not None or not parsed.hostname:
+            return jsonify({"ok": False, "error": "Stored domain property must not include a port"}), 400
+        if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            return jsonify({"ok": False, "error": "Stored domain property must be a domain"}), 400
+        url = "https://" + parsed.hostname.lower().rstrip(".")
+
+        cur.execute(
+            "SELECT id FROM tasks WHERE type='seo_measurement' "
+            "AND status IN ('queued','running') AND params->>'brand_id'=%s "
+            "ORDER BY id DESC LIMIT 1", (str(brand_id),))
+        existing = cur.fetchone()
+        if existing:
+            return jsonify({"ok": True, "task_id": existing["id"], "deduplicated": True})
+
+        params = {"brand_id": brand_id, "project_id": project_id, "url": url}
+        if properties.get("gsc_property"):
+            params["gsc_property"] = properties["gsc_property"]
+        if properties.get("ga4_property_id"):
+            params["ga4_property_id"] = properties["ga4_property_id"]
+        cur.execute(
+            "INSERT INTO tasks (type,status,params,triggered_by) "
+            "VALUES ('seo_measurement','queued',%s,'dashboard-brand-report') RETURNING id",
+            (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+        return jsonify({"ok": True, "task_id": task_id, "deduplicated": False})
+    finally:
+        conn.close()
 
 
 # ── Client onboard (create engagement) ──────────────────────────
