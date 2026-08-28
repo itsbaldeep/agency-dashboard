@@ -82,7 +82,8 @@
         <td><strong>{{ item.name }}</strong><div class="mono subtle">{{ item.id }}</div></td>
         <td class="mono">{{ item.source_path }}</td>
         <td>
-          {% if item.placeholder_like %}<span class="badge badge-red">Weak / unhealthy</span>
+          {% if item.compromised_at %}<span class="badge badge-red">Known compromised</span>
+          {% elif item.placeholder_like %}<span class="badge badge-red">Weak / unhealthy</span>
           {% else %}<span class="badge badge-green">No weak markers</span>{% endif %}
           {% if item.health_status %}<div class="subtle mt-1">Probe: {{ item.health_status }}</div>{% endif %}
         </td>

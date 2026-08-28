@@ -123,6 +123,29 @@ class WorkflowRouteTests(unittest.TestCase):
         self.assertIn("No weak markers", html)
         self.assertNotIn("Mark rotated", html)
 
+    def test_alert_credential_health_shows_known_compromise(self):
+        snapshot = {
+            "summary": {"open_count": 1, "critical_count": 1, "clear_count": 4},
+            "backup": {"status": "clear", "offsite": {"overdue": False}},
+            "credentials": [{
+                "id": "core.env:POSTGRES_PASSWORD",
+                "name": "POSTGRES_PASSWORD",
+                "source_path": "/home/agency/.config/agency/core.env",
+                "placeholder_like": False,
+                "compromised_at": "2026-08-28T18:01:03+00:00",
+                "next_action": "Run the controlled maintenance command.",
+            }],
+            "credential_summary": {"open": 1, "compromised": 1},
+            "maintenance": {"status": "clear", "upgradable_count": 0,
+                             "reboot_required": False, "commands": []},
+            "root_recovery": {"status": "clear", "detail": "clear"},
+            "failed_units": {"status": "clear", "units": []},
+            "generated_at": "2026-08-28T18:01:03+00:00",
+        }
+        with mock.patch.object(dashboard.models, "get_combined_alert_state", return_value=snapshot):
+            response = self.client.get("/alerts/data")
+        self.assertIn(b"Known compromised", response.data)
+
     def test_alert_action_is_whitelisted_and_silent(self):
         conn = FakeConnection([None, {"id": 77}])
         with mock.patch.object(dashboard.models, "db", return_value=conn):
