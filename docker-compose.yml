@@ -15,13 +15,15 @@ services:
       - /home/agency/agency-os/caddy-apps:/caddy-apps:ro
       - /home/agency/agency-os/scripts:/home/agency/agency-os/scripts:ro
       - /home/agency/agency-os/config:/agency-config:ro
-    env_file: /home/agency/agency-os/.env
     environment:
       DB_HOST: agency-postgres
       DB_NAME: agencyos
       DB_USER: agency
+      DB_PASS: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       CH_HOST: agency-clickhouse
       CH_USER: agency
+      CH_PASS: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       BIND_HOST: "0.0.0.0"
       BIND_PORT: "8000"
 
