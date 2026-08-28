@@ -24,7 +24,7 @@
       <div class="stat-label">Disk</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value" style="color:{% if maintenance.upgradable_count %}var(--amber){% else %}var(--green){% endif %}">{{ maintenance.upgradable_count|default(0) }}</div>
+      <div class="stat-value" style="color:{% if maintenance.apt_check_ok is sameas false %}var(--red){% elif maintenance.upgradable_count %}var(--amber){% else %}var(--green){% endif %}">{% if maintenance.apt_check_ok is sameas false %}?{% else %}{{ maintenance.upgradable_count|default(0) }}{% endif %}</div>
       <div class="stat-label">Package updates</div>
     </div>
     <div class="stat-card">

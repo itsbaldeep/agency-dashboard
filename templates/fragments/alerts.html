@@ -103,12 +103,14 @@
   <section class="chore-card {{ 'is-open' if maintenance.status != 'clear' else 'is-clear' }}">
     <div class="chore-heading">
       <div><span class="chore-kicker">Host maintenance</span><h2>Packages and kernel</h2><p>The dashboard audits and explains this chore. It deliberately does not run sudo upgrades or reboot the VPS.</p></div>
-      <div class="gap-2"><span class="badge {{ 'badge-red' if maintenance.reboot_required else ('badge-amber' if maintenance.upgradable_count else 'badge-green') }}">{{ maintenance.upgradable_count or 0 }} updates{% if maintenance.reboot_required %} · reboot required{% endif %}</span><button class="btn btn-sm" onclick="runAlertAction('recheck_system',{},this)">Recheck system</button></div>
+      <div class="gap-2"><span class="badge {{ 'badge-red' if maintenance.apt_check_ok is sameas false or maintenance.reboot_required else ('badge-amber' if maintenance.upgradable_count else 'badge-green') }}">{% if maintenance.apt_check_ok is sameas false %}APT check unavailable{% else %}{{ maintenance.upgradable_count or 0 }} updates{% endif %}{% if maintenance.reboot_required %} · reboot required{% endif %}</span><button class="btn btn-sm" onclick="runAlertAction('recheck_system',{},this)">Recheck system</button></div>
     </div>
     <div class="evidence-grid">
       <div><span>Running kernel</span><strong class="mono">{{ maintenance.current_kernel or 'unknown' }}</strong></div>
       <div><span>Reboot</span><strong class="{{ 'severity-red' if maintenance.reboot_required else 'severity-green' }}">{{ 'Required' if maintenance.reboot_required else 'Not required' }}</strong></div>
+      {% if maintenance.apt_check_ok is sameas false %}<div class="wide"><span>APT evidence</span><strong class="severity-red">Unavailable; recheck required</strong></div>{% endif %}
       <div class="wide"><span>Pending packages</span><strong>{{ (maintenance.upgradable_packages or [])|join(', ') if maintenance.upgradable_packages else 'None' }}</strong></div>
+      {% if maintenance.deferred_packages %}<div class="wide"><span>Deferred by APT policy</span><strong>{{ maintenance.deferred_packages|join(', ') }}</strong></div>{% endif %}
       {% if maintenance.reboot_packages %}<div class="wide"><span>Reboot-triggering packages</span><strong>{{ maintenance.reboot_packages|join(', ') }}</strong></div>{% endif %}
     </div>
     <ol class="command-steps">
