@@ -72,31 +72,23 @@
 
   <section class="chore-card {{ 'is-open' if (alerts.credential_summary or {}).open else 'is-clear' }}">
     <div class="chore-heading">
-      <div><span class="chore-kicker">Security</span><h2>Core credential rotation</h2><p>Names and evidence only—secret values are never sent to this page. Client and engagement credentials are outside this core registry.</p></div>
-      <div class="gap-2"><span class="badge badge-amber">{{ (alerts.credential_summary or {}).open or 0 }} open</span><button class="btn btn-sm" onclick="runAlertAction('recheck_credentials',{},this)">Recheck credentials</button></div>
+      <div><span class="chore-kicker">Security</span><h2>Core credential health</h2><p>Names and evidence only, secret values are never sent to this page. Routine rotation is not required. Replace credentials only when weak, unhealthy, or compromised.</p></div>
+      <div class="gap-2"><span class="badge {{ 'badge-red' if (alerts.credential_summary or {}).open else 'badge-green' }}">{{ (alerts.credential_summary or {}).open or 0 }} open</span><button class="btn btn-sm" onclick="runAlertAction('recheck_credentials',{},this)">Recheck credentials</button></div>
     </div>
     <div class="table-wrap"><table class="credential-table">
-      <tr><th>Credential</th><th>Source</th><th>Evidence</th><th>What you do</th><th></th></tr>
+      <tr><th>Credential</th><th>Source</th><th>Evidence</th><th>What you do</th></tr>
       {% for item in alerts.credentials or [] %}
       <tr>
         <td><strong>{{ item.name }}</strong><div class="mono subtle">{{ item.id }}</div></td>
         <td class="mono">{{ item.source_path }}</td>
         <td>
           {% if item.placeholder_like %}<span class="badge badge-red">Weak / unhealthy</span>
-          {% elif item.human_rotated_at %}<span class="badge badge-green">Human-rotated</span>
-          {% else %}<span class="badge badge-amber">Not acknowledged</span>{% endif %}
+          {% else %}<span class="badge badge-green">No weak markers</span>{% endif %}
           {% if item.health_status %}<div class="subtle mt-1">Probe: {{ item.health_status }}</div>{% endif %}
         </td>
         <td>{{ item.next_action }}{% if item.command %}<div class="mini-command"><code>{{ item.command }}</code><button class="btn btn-xs" data-copy="{{ item.command|e }}" onclick="copyCommand(this)">Copy</button></div>{% endif %}</td>
-        <td>
-          {% if not item.placeholder_like and not item.human_rotated_at %}
-          <button class="btn btn-sm btn-green" data-credential-id="{{ item.id }}" onclick="runAlertAction('mark_credential',{credential_id:this.dataset.credentialId},this)">Mark rotated</button>
-          {% elif item.placeholder_like %}
-          <span class="subtle">Replace first</span>
-          {% else %}<span class="severity-green">Done</span>{% endif %}
-        </td>
       </tr>
-      {% else %}<tr><td colspan="5" class="empty">No core credential evidence is available.</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="4" class="empty">No core credential evidence is available.</td></tr>{% endfor %}
     </table></div>
   </section>
 

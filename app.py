@@ -1401,7 +1401,7 @@ def approval_act(approval_id, decision):
 # ── Alerts / Human Chores ─────────────────────────────────────
 
 ALERT_ACTIONS = {
-    "mark_offsite", "mark_credential", "verify_backup",
+    "mark_offsite", "verify_backup",
     "recheck_all", "recheck_system", "recheck_credentials",
 }
 
@@ -1428,16 +1428,6 @@ def alert_action():
         if payload.get("confirmed") is not True:
             return jsonify({"ok": False, "error": "Confirm the copied file and matching SHA-256 first"}), 400
         params.update({"confirmed": True, "note": str(payload.get("note") or "")[:200]})
-    elif action == "mark_credential":
-        credential_id = str(payload.get("credential_id") or "")
-        valid_ids = {
-            str(item.get("id")) for item in models.get_alert_state().get("credentials", [])
-            if item.get("id")
-        }
-        if credential_id not in valid_ids:
-            return jsonify({"ok": False, "error": "Unknown credential reference"}), 400
-        params["credential_id"] = credential_id
-
     conn = models.db()
     try:
         cur = conn.cursor()
