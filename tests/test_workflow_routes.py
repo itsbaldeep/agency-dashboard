@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -20,6 +21,9 @@ class FakeCursor:
 
     def fetchone(self):
         return self.rows.pop(0) if self.rows else None
+
+    def fetchall(self):
+        return []
 
 
 class FakeConnection:
@@ -63,6 +67,66 @@ class WorkflowRouteTests(unittest.TestCase):
         self.assertEqual(merged["suggestion_id"], 7)
         self.assertEqual(merged["target_keyword"], "resume automation")
         self.assertEqual(conn.commits, 1)
+
+    def test_project_audit_uses_public_site_and_queues_full_workflow(self):
+        conn = FakeConnection([
+            {"id": 30, "name": "TrueApply", "lifecycle": "active", "state": "live",
+             "repo_url": "https://github.com/itsbaldeep/trueapply"},
+            {"id": 31},
+            None,
+            {"id": 501},
+        ])
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = self.client.post(
+                "/projects/30/audit",
+                data={"website_url": "https://trueapply.in"},
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/engagements/brand/31/report", response.location)
+        insert = next((params for sql, params in conn.cursor_value.calls
+                       if sql.startswith("INSERT INTO tasks")), None)
+        self.assertIsNotNone(insert)
+        self.assertIn("marketing_audit", conn.cursor_value.calls[-1][0])
+        self.assertNotIn("github.com", json.dumps(insert))
+
+    def test_project_audit_does_not_use_repo_url_without_public_site(self):
+        conn = FakeConnection([
+            {"id": 30, "name": "TrueApply", "lifecycle": "active", "state": "live",
+             "repo_url": "https://github.com/itsbaldeep/trueapply"},
+            None,
+        ])
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = self.client.post("/projects/30/audit", data={})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("public+site+URL", response.location)
+        self.assertFalse(any("INSERT INTO tasks" in sql for sql, _ in conn.cursor_value.calls))
+
+    def test_project_engagement_resolves_latest_linked_brand(self):
+        class ModelCursor:
+            def __init__(self):
+                self.sql = ""
+            def execute(self, sql, params=()):
+                self.sql = sql
+            def fetchone(self):
+                if "FROM projects p" in self.sql:
+                    return {"id": 30, "name": "TrueApply", "state": "live",
+                            "brand_id": 31, "brand_name": "TrueApply",
+                            "brand_access_tier": "0", "project_id": 30}
+                return None
+            def fetchall(self):
+                if "brand_properties" in self.sql:
+                    return [{"property_type": "domain", "value": "trueapply.in"}]
+                return []
+        class ModelConnection:
+            def __init__(self): self.cursor_value = ModelCursor()
+            def cursor(self): return self.cursor_value
+            def close(self): pass
+        with mock.patch.object(dashboard.models, "db", return_value=ModelConnection()), \
+             mock.patch.object(dashboard.models, "get_docker_stats", return_value={}), \
+             mock.patch.object(dashboard.models, "_caddy_sites", return_value={}):
+            engagement = dashboard.models.get_engagement_detail("project", 30)
+        self.assertEqual(engagement["brand_id"], 31)
+        self.assertEqual(engagement["brand_properties"][0]["value"], "trueapply.in")
 
     def test_resume_refuses_unmapped_side_effect_task(self):
         conn = FakeConnection([{
@@ -196,15 +260,16 @@ class WorkflowRouteTests(unittest.TestCase):
 
     def test_agent_alert_is_cleared_by_later_verified_result(self):
         with tempfile.TemporaryDirectory() as root:
-            path = Path(root) / "2026-08-24.jsonl"
+            current_day = datetime.now(timezone.utc).date().isoformat()
+            path = Path(root) / f"{current_day}.jsonl"
             rows = [
-                {"ts": "2026-08-24T00:00:00Z", "trace_id": "atr_one",
+                {"ts": f"{current_day}T00:00:00Z", "trace_id": "atr_one",
                  "kind": "alert", "status": "needs_human", "severity": "urgent",
                  "summary": "Choose a window"},
-                {"ts": "2026-08-24T00:01:00Z", "trace_id": "atr_one",
+                {"ts": f"{current_day}T00:01:00Z", "trace_id": "atr_one",
                  "kind": "result", "status": "verified", "severity": "info",
                  "summary": "Window confirmed"},
-                {"ts": "2026-08-24T00:02:00Z", "trace_id": "atr_two",
+                {"ts": f"{current_day}T00:02:00Z", "trace_id": "atr_two",
                  "kind": "alert", "status": "needs_human", "severity": "warning",
                  "summary": "Grant property access"},
             ]

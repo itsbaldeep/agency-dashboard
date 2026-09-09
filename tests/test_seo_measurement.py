@@ -26,11 +26,15 @@ class Cursor:
             return self.rows.get("brand")
         if "FROM projects" in self.sql:
             return self.rows.get("project")
+        if "FROM brand_properties" in self.sql and "domain" in self.sql:
+            return self.rows.get("domain")
         if "FROM audits" in self.sql and "audit_type='seo_measurement'" in self.sql:
             return self.rows.get("seo")
         if "FROM audits" in self.sql:
             return self.rows.get("ai")
         if "FROM tasks" in self.sql and "seo_measurement" in self.sql:
+            return self.duplicate
+        if "FROM tasks" in self.sql and "marketing_audit" in self.sql:
             return self.duplicate
         if "INSERT INTO tasks" in self.sql:
             return {"id": 91}
@@ -122,6 +126,53 @@ class SeoMeasurementTests(unittest.TestCase):
         with mock.patch.object(dashboard.models, "db", return_value=missing):
             response = dashboard.app.test_client().post("/api/brands/999/seo-measurement")
         self.assertEqual(response.status_code, 404)
+
+    def test_measurement_setup_validates_and_saves_non_secret_ids(self):
+        cursor = Cursor(rows={"brand": {"id": 7, "project_id": 3},
+                              "project": {"id": 3, "lifecycle": "active"}})
+        conn = Connection(cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post(
+                "/api/brands/7/measurement-setup",
+                data={"gsc_property": "sc-domain:TrueApply.in",
+                      "ga4_property_id": "553391253",
+                      "ga4_measurement_id": "g-2gw0337cjv"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["setup"], {
+            "gsc_property": "sc-domain:trueapply.in",
+            "ga4_property_id": "553391253",
+            "ga4_measurement_id": "G-2GW0337CJV",
+        })
+        self.assertEqual(conn.commits, 1)
+
+    def test_measurement_setup_rejects_non_string_json_values(self):
+        with mock.patch.object(dashboard.models, "db") as db:
+            response = dashboard.app.test_client().post(
+                "/api/brands/7/measurement-setup",
+                json={"gsc_property": 123, "ga4_property_id": "553391253", "ga4_measurement_id": "G-2GW0337CJV"},
+            )
+        self.assertEqual(response.status_code, 400)
+        db.assert_not_called()
+
+    def test_full_audit_enqueues_parent_and_deduplicates(self):
+        cursor = Cursor(rows={"brand": {"id": 7, "project_id": 3},
+                              "project": {"id": 3, "lifecycle": "active", "state": "live"},
+                              "domain": {"value": "trueapply.in"}}, duplicate={"id": 77})
+        conn = Connection(cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post("/api/brands/7/full-audit")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["deduplicated"])
+
+    def test_full_audit_requires_public_site_not_repository(self):
+        cursor = Cursor(rows={"brand": {"id": 7, "project_id": 3},
+                              "project": {"id": 3, "lifecycle": "active", "state": "live"}})
+        conn = Connection(cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post("/api/brands/7/full-audit")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("public site URL", response.get_json()["error"])
 
 
 if __name__ == "__main__":

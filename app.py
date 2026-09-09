@@ -2,6 +2,7 @@
 """Agency OS Dashboard — rewritten from scratch with unified engagement model."""
 
 import json
+import ipaddress
 import os
 import re
 import subprocess
@@ -169,12 +170,95 @@ def _parse_jsonb(v):
     return v or {}
 
 
+MEASUREMENT_PROPERTY_TYPES = ("gsc_property", "ga4_property_id", "ga4_measurement_id")
+GSC_SERVICE_ACCOUNT_EMAIL = os.environ.get(
+    "AGENCY_GSC_SERVICE_ACCOUNT_EMAIL",
+    "gsc-api-user@gsc-api-project-505616.iam.gserviceaccount.com",
+)
+
+
+def _normalise_public_url(value):
+    """Return a safe site-root URL, or ``None`` for an invalid value."""
+    if not isinstance(value, str):
+        return None
+    value = (value or "").strip()
+    if not value:
+        return None
+    parsed = urlparse(value if "://" in value else "https://" + value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return None
+    try:
+        if parsed.port is not None:
+            return None
+    except ValueError:
+        return None
+    if parsed.path not in ("", "/"):
+        return None
+    try:
+        host_ip = ipaddress.ip_address(parsed.hostname)
+        if not host_ip.is_global:
+            return None
+    except ValueError:
+        pass
+    return "https://" + parsed.hostname.lower().rstrip(".")
+
+
+def _normalise_gsc_property(value):
+    if not isinstance(value, str):
+        return None
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if value.startswith("sc-domain:"):
+        host = value.split(":", 1)[1].strip().lower().rstrip(".")
+        if re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", host) and "." in host:
+            return "sc-domain:" + host
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    try:
+        if parsed.port is not None:
+            return None
+    except ValueError:
+        return None
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return None
+    return parsed.scheme + "://" + parsed.hostname.lower().rstrip(".") + "/"
+
+
+def _measurement_setup_from_properties(properties):
+    values = {p.get("property_type"): str(p.get("value") or "").strip() for p in properties}
+    return {key: values.get(key, "") for key in MEASUREMENT_PROPERTY_TYPES}
+
+
+def _upsert_brand_property(cur, brand_id, property_type, value):
+    if value:
+        cur.execute(
+            "INSERT INTO brand_properties (brand_id, property_type, value, accessible) "
+            "VALUES (%s, %s, %s, true) ON CONFLICT (brand_id, property_type) DO UPDATE SET "
+            "value=EXCLUDED.value, accessible=EXCLUDED.accessible, created_at=now()",
+            (brand_id, property_type, value),
+        )
+    else:
+        cur.execute(
+            "DELETE FROM brand_properties WHERE brand_id=%s AND property_type=%s",
+            (brand_id, property_type),
+        )
+
+
 @app.route("/engagements/brand/<int:brand_id>/report")
 def brand_report(brand_id):
     conn = models.db()
     project_id = None
     agent_allowed = False
     repo_url = None
+    full_audit_run = None
+    full_audit_children = []
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM brands WHERE id=%s", (brand_id,))
@@ -204,6 +288,17 @@ def brand_report(brand_id):
 
         cur.execute("SELECT * FROM audits WHERE brand_id=%s AND audit_type='seo_measurement' ORDER BY created_at DESC LIMIT 1", (brand_id,))
         seo_audit = cur.fetchone()
+
+        cur.execute(
+            "SELECT id, status, created_at, started_at, finished_at, result_ref, error "
+            "FROM tasks WHERE type='marketing_audit' AND params->>'brand_id'=%s "
+            "ORDER BY id DESC LIMIT 1", (str(brand_id),))
+        full_audit_run = cur.fetchone()
+        if full_audit_run:
+            cur.execute(
+                "SELECT id, type, status, created_at, started_at, finished_at, error "
+                "FROM tasks WHERE parent_task_id=%s ORDER BY id", (full_audit_run["id"],))
+            full_audit_children = cur.fetchall()
 
         cur.execute(
             "SELECT id, audit_type, created_at, summary->>'brand_share_of_voice_pct' as vis_pct, "
@@ -324,6 +419,8 @@ def brand_report(brand_id):
                 domain = p["value"]
                 break
 
+    measurement_setup = _measurement_setup_from_properties(brand_properties)
+
     audit_date_fmt = ""
     if audit and audit.get("created_at"):
         try:
@@ -367,6 +464,10 @@ def brand_report(brand_id):
                            task_by_suggestion=task_by_suggestion,
                            agent_allowed=agent_allowed, repo_url=repo_url,
                            project_id=project_id,
+                           measurement_setup=measurement_setup,
+                           gsc_service_account_email=GSC_SERVICE_ACCOUNT_EMAIL,
+                           full_audit_run=full_audit_run,
+                           full_audit_children=full_audit_children,
                            summary_json=json.dumps(audit_summary, indent=2, default=str) if audit_summary else "")
 
 
@@ -431,6 +532,125 @@ def enqueue_seo_measurement(brand_id):
         task_id = cur.fetchone()["id"]
         conn.commit()
         return jsonify({"ok": True, "task_id": task_id, "deduplicated": False})
+    finally:
+        conn.close()
+
+
+@app.route("/api/brands/<int:brand_id>/measurement-setup", methods=["POST"])
+def save_measurement_setup(brand_id):
+    """Save repeatable, non-secret Google measurement identifiers for a brand."""
+    payload = request.get_json(silent=True) or request.form.to_dict()
+    gsc_value = _normalise_gsc_property(payload.get("gsc_property", ""))
+    if gsc_value is None:
+        return jsonify({"ok": False, "error": "GSC property must be sc-domain:example.com or an https:// property URL"}), 400
+
+    ga4_raw = payload.get("ga4_property_id") or ""
+    if not isinstance(ga4_raw, str):
+        return jsonify({"ok": False, "error": "GA4 property ID must be a string containing only digits"}), 400
+    ga4_value = ga4_raw.strip()
+    if ga4_value and not re.fullmatch(r"[0-9]{4,20}", ga4_value):
+        return jsonify({"ok": False, "error": "GA4 property ID must be the numeric ID from Admin > Property details"}), 400
+
+    measurement_raw = payload.get("ga4_measurement_id") or ""
+    if not isinstance(measurement_raw, str):
+        return jsonify({"ok": False, "error": "GA4 measurement ID must be a string like G-XXXXXXXXXX"}), 400
+    measurement_value = measurement_raw.strip().upper()
+    if measurement_value and not re.fullmatch(r"G-[A-Z0-9]+", measurement_value):
+        return jsonify({"ok": False, "error": "GA4 measurement ID must look like G-XXXXXXXXXX"}), 400
+
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, project_id FROM brands WHERE id=%s FOR UPDATE", (brand_id,))
+        brand = cur.fetchone()
+        if not brand:
+            return jsonify({"ok": False, "error": "Brand not found"}), 404
+        if not brand.get("project_id"):
+            return jsonify({"ok": False, "error": "Brand has no linked project"}), 400
+        cur.execute("SELECT lifecycle FROM projects WHERE id=%s", (brand["project_id"],))
+        project = cur.fetchone()
+        if not project or project.get("lifecycle") != "active":
+            return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
+        _upsert_brand_property(cur, brand_id, "gsc_property", gsc_value)
+        _upsert_brand_property(cur, brand_id, "ga4_property_id", ga4_value)
+        _upsert_brand_property(cur, brand_id, "ga4_measurement_id", measurement_value)
+        conn.commit()
+        return jsonify({
+            "ok": True,
+            "setup": {
+                "gsc_property": gsc_value,
+                "ga4_property_id": ga4_value,
+                "ga4_measurement_id": measurement_value,
+            },
+        })
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+def _queue_marketing_audit(cur, brand_id, project_id, url, triggered_by):
+    cur.execute(
+        "SELECT id FROM tasks WHERE type='marketing_audit' AND status IN ('queued','running') "
+        "AND params->>'brand_id'=%s ORDER BY id DESC LIMIT 1",
+        (str(brand_id),),
+    )
+    existing = cur.fetchone()
+    if existing:
+        return existing["id"], True
+    cur.execute(
+        "SELECT property_type, value FROM brand_properties WHERE brand_id=%s "
+        "AND property_type IN ('gsc_property','ga4_property_id','ga4_measurement_id')",
+        (brand_id,),
+    )
+    properties = {row["property_type"]: row["value"] for row in cur.fetchall()}
+    params = {
+        "brand_id": brand_id,
+        "project_id": project_id,
+        "url": url,
+        "source": "dashboard-full-marketing-audit",
+    }
+    for key in ("gsc_property", "ga4_property_id", "ga4_measurement_id"):
+        if properties.get(key):
+            params[key] = properties[key]
+    cur.execute(
+        "INSERT INTO tasks (type, status, params, triggered_by) "
+        "VALUES ('marketing_audit','queued',%s,%s) RETURNING id",
+        (json.dumps(params), triggered_by),
+    )
+    return cur.fetchone()["id"], False
+
+
+@app.route("/api/brands/<int:brand_id>/full-audit", methods=["POST"])
+def enqueue_full_marketing_audit(brand_id):
+    """Queue the complete defend, AI visibility, competitor, and SEO workflow."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, project_id FROM brands WHERE id=%s FOR UPDATE", (brand_id,))
+        brand = cur.fetchone()
+        if not brand:
+            return jsonify({"ok": False, "error": "Brand not found"}), 404
+        if not brand.get("project_id"):
+            return jsonify({"ok": False, "error": "Brand has no linked project"}), 400
+        cur.execute("SELECT lifecycle, state FROM projects WHERE id=%s", (brand["project_id"],))
+        project = cur.fetchone()
+        if not project or project.get("lifecycle") != "active":
+            return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
+        cur.execute("SELECT value FROM brand_properties WHERE brand_id=%s AND property_type='domain'", (brand_id,))
+        prop = cur.fetchone()
+        url = _normalise_public_url((request.form.get("website_url") or "").strip() or (prop or {}).get("value"))
+        if not url:
+            return jsonify({"ok": False, "error": "Add the public site URL before running the full audit"}), 400
+        if (prop or {}).get("value") != url.removeprefix("https://"):
+            _upsert_brand_property(cur, brand_id, "domain", url.removeprefix("https://"))
+        task_id, deduplicated = _queue_marketing_audit(cur, brand_id, brand["project_id"], url, "dashboard-brand-report")
+        conn.commit()
+        return jsonify({"ok": True, "task_id": task_id, "deduplicated": deduplicated})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
     finally:
         conn.close()
 
@@ -587,12 +807,25 @@ def projects():
 @app.route("/projects/<int:project_id>")
 def project_detail(project_id):
     conn = models.db()
+    brand = None
+    public_site_url = ""
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM projects WHERE id=%s", (project_id,))
         project = cur.fetchone()
         if not project:
             return redirect("/projects")
+
+        try:
+            cur.execute("SELECT id, name FROM brands WHERE project_id=%s ORDER BY id DESC LIMIT 1", (project_id,))
+            brand = cur.fetchone()
+            if brand:
+                cur.execute("SELECT value FROM brand_properties WHERE brand_id=%s AND property_type='domain'", (brand["id"],))
+                domain_row = cur.fetchone()
+                public_site_url = (domain_row or {}).get("value") or ""
+        except Exception:
+            brand = None
+            public_site_url = ""
 
         caps = None
         try:
@@ -673,7 +906,8 @@ def project_detail(project_id):
     return render_template("project_detail.html", project=project, caps=caps,
                            latest_audit=latest_audit, content_items=content_items,
                            dev_activity=dev_activity, pending=pending,
-                           outlines=outlines, recent_research=recent_research)
+                           outlines=outlines, recent_research=recent_research,
+                           brand=brand, public_site_url=public_site_url)
 
 
 @app.route("/projects/onboard", methods=["POST"])
@@ -709,19 +943,38 @@ def project_audit(project_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT repo_url FROM projects WHERE id=%s", (project_id,))
+        cur.execute("SELECT id, name, lifecycle, state FROM projects WHERE id=%s FOR UPDATE", (project_id,))
         row = cur.fetchone()
-        if not row or not (row["repo_url"] or "").startswith("http"):
-            return redirect("/projects/%d" % project_id)
-        params = json.dumps({"project_id": project_id, "url": row["repo_url"]})
-        cur.execute(
-            "INSERT INTO tasks (type, status, params, triggered_by) "
-            "VALUES ('defend_audit', 'queued', %s, 'dashboard') RETURNING id", (params,))
-        task_id = cur.fetchone()["id"]
+        if not row:
+            return redirect("/projects")
+        if row.get("lifecycle") != "active":
+            return redirect("/projects/%d?audit_error=Project+is+not+active" % project_id)
+        cur.execute("SELECT id FROM brands WHERE project_id=%s ORDER BY id DESC LIMIT 1", (project_id,))
+        brand = cur.fetchone()
+        public_url = _normalise_public_url(request.form.get("website_url", ""))
+        if not brand:
+            if not public_url:
+                return redirect("/projects/%d?audit_error=Add+the+public+site+URL+before+running+the+audit" % project_id)
+            slug_value = re.sub(r"[^a-z0-9]+", "-", row["name"].lower()).strip("-") or "project"
+            slug_value = "%s-project-%s" % (slug_value, project_id)
+            cur.execute(
+                "INSERT INTO brands (name, slug, access_tier, project_id) VALUES (%s,%s,'0',%s) RETURNING id",
+                (row["name"], slug_value, project_id),
+            )
+            brand = cur.fetchone()
+        if not public_url:
+            cur.execute("SELECT value FROM brand_properties WHERE brand_id=%s AND property_type='domain'", (brand["id"],))
+            domain_row = cur.fetchone()
+            public_url = _normalise_public_url((domain_row or {}).get("value"))
+        if not public_url:
+            return redirect("/projects/%d?audit_error=Add+the+public+site+URL+before+running+the+audit" % project_id)
+        _upsert_brand_property(cur, brand["id"], "domain", public_url.removeprefix("https://"))
+        task_id, _deduplicated = _queue_marketing_audit(
+            cur, brand["id"], project_id, public_url, "dashboard-project-audit")
         conn.commit()
     finally:
         conn.close()
-    return redirect("/tasks/%d" % task_id)
+    return redirect("/engagements/brand/%d/report?full_audit_task=%d" % (brand["id"], task_id))
 
 
 @app.route("/projects/<int:project_id>/draft", methods=["POST"])

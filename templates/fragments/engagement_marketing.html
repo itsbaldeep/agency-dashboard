@@ -9,7 +9,7 @@
           {% endif %}
         {% endfor %}
       {% endif %}
-      <button class="btn btn-sm" onclick="document.getElementById('audit-form').style.display='block'">Run Audit</button>
+      <button class="btn btn-sm" onclick="document.getElementById('audit-form').style.display='block'">Run full audit</button>
       {% if eng.brand_id %}
       <a href="/engagements/brand/{{ eng.brand_id }}/report" class="btn btn-sm btn-primary" style="font-weight:600">&#128202; Full Report</a>
       {% endif %}
@@ -21,8 +21,9 @@
       <div class="gap-2 flex-center">
         <input type="text" id="audit-domain-{{ eng.ref_id }}" placeholder="domain" style="max-width:300px"
           value="{% for p in eng.brand_properties %}{% if p.property_type=='domain' %}{{ p.value }}{% endif %}{% endfor %}">
-        <button class="btn btn-sm btn-primary" onclick="runAudit({{ eng.ref_id }})">Run Audit</button>
+        <button class="btn btn-sm btn-primary" onclick="runAudit({{ eng.ref_id }}, {{ eng.brand_id or 'null' }})">Run full audit</button>
       </div>
+      <div class="subtle mt-1">This runs the public-site audit, AI visibility, competitor discovery, and SEO measurement as one tracked workflow.</div>
       <div id="audit-status-{{ eng.ref_id }}" class="mt-1"></div>
     </div>
   </div>
@@ -147,18 +148,20 @@
 
 <script>
 var pendingSuggestionId=null;
-async function runAudit(cid) {
+async function runAudit(cid, brandId) {
   var domain = document.getElementById('audit-domain-'+cid).value.trim();
   if (!domain) return;
   var s = document.getElementById('audit-status-'+cid);
-  s.innerHTML = '<div class="subtle">Starting audit for '+domain+'...</div>';
+  s.textContent = 'Starting audit for '+domain+'...';
+  s.style.color = '';
   try {
-    var r = await fetch('/api/brands/audit', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'domain='+encodeURIComponent(domain) });
+    var endpoint = brandId ? '/api/brands/'+brandId+'/full-audit' : '/api/brands/audit';
+    var r = await fetch(endpoint, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'website_url='+encodeURIComponent(domain)+'&domain='+encodeURIComponent(domain) });
     var d = await r.json();
-    if (!d.ok) { s.innerHTML = '<div class="subtle" style="color:var(--red)">'+d.error+'</div>'; return; }
-    s.innerHTML = '<div class="subtle">Audit queued (task #'+d.task_id+')...</div>';
+    if (!d.ok) { s.textContent = d.error || 'Unable to queue audit'; s.style.color = 'var(--red)'; return; }
+    s.textContent = 'Full audit queued (task #'+d.task_id+')...';
     pollAudit(d.task_id, s);
-  } catch(e) { s.innerHTML = '<div class="subtle" style="color:var(--red)">Error: '+e.message+'</div>'; }
+  } catch(e) { s.textContent = 'Error: '+e.message; s.style.color = 'var(--red)'; }
 }
 async function pollAudit(tid, el) {
   for (var i = 0; i < 60; i++) {
@@ -166,8 +169,8 @@ async function pollAudit(tid, el) {
     try {
       var r = await fetch('/api/tasks/'+tid);
       var d = await r.json();
-      if (d.status === 'done') { el.innerHTML = '<div class="subtle" style="color:var(--green)">Complete</div>'; location.reload(); return; }
-      else if (d.status === 'failed') { el.innerHTML = '<div class="subtle" style="color:var(--red)">Failed: '+(d.error||'')+'</div>'; return; }
+      if (d.status === 'done') { el.textContent = 'Complete'; el.style.color = 'var(--green)'; location.reload(); return; }
+      else if (d.status === 'failed') { el.textContent = 'Failed: '+(d.error||''); el.style.color = 'var(--red)'; return; }
     } catch(e) { if(i>55) return; }
   }
 }
@@ -191,8 +194,12 @@ async function generateContent(sid) {
   var d = await r.json();
   if(d.ok) {
     var el = document.getElementById('sug-result-'+sid);
-    el.innerHTML = '<div class="subtle">Generating...</div>';
+    el.textContent = 'Generating...';
     pollDraft(sid, el);
+  } else {
+    var error = document.getElementById('sug-result-'+sid);
+    error.textContent = d.error || 'Unable to generate content';
+    error.style.color = 'var(--red)';
   }
 }
 async function pollDraft(sid, el) {
@@ -201,8 +208,8 @@ async function pollDraft(sid, el) {
     try {
       var r = await fetch('/api/suggestions/'+sid+'/task');
       var d = await r.json();
-      if (d.status === 'done') { el.innerHTML = '<div class="subtle" style="color:var(--green)">Generated ('+d.tokens+' tok / $'+d.cost+')</div>'; return; }
-      else if (d.status === 'failed') { el.innerHTML = '<div class="subtle" style="color:var(--red)">Failed: '+(d.error||'')+'</div>'; return; }
+      if (d.status === 'done') { el.textContent = 'Generated ('+d.tokens+' tok / $'+d.cost+')'; el.style.color = 'var(--green)'; return; }
+      else if (d.status === 'failed') { el.textContent = 'Failed: '+(d.error||''); el.style.color = 'var(--red)'; return; }
     } catch(e) { if(i>25) return; }
   }
 }

@@ -13,6 +13,8 @@
 {% set prompts_used = audit_summary.get('prompts_used') or [] %}
 {% set prompts_queried = audit_summary.get('prompts_queried',0) %}
 {% set brand_cited = audit_summary.get('brand_cited',0) %}
+{% set measurement_setup = measurement_setup|default({}, true) %}
+{% set gsc_service_account_email = gsc_service_account_email|default('the configured Agency Search Console service account', true) %}
 
 {% set vis_class = 'severity-red' %}
 {% if sov_num > 20 %}{% set vis_class = 'severity-green' %}
@@ -39,12 +41,76 @@
   </div>
 </div>
 
-<div class="report-section">
+<div class="report-section" id="marketing-workflow">
 <div class="card">
+  <div class="card-header">
+    <span class="card-title">Audit workflow</span>
+    <button class="btn btn-sm btn-primary" type="button" onclick="queueFullMarketingAudit()">Run full audit</button>
+  </div>
+  <p class="subtle" style="margin-top:0;">One run covers the public-site defend audit, competitor and AI visibility analysis, crawl, PageSpeed, GSC, and GA4. Each stage remains visible as its own tracked task.</p>
+  {% if full_audit_run %}
+  <div class="chips mb-2">
+    <span class="pill"><span class="pill-label">Parent</span><a href="/tasks/{{ full_audit_run.id }}">#{{ full_audit_run.id }}</a> {{ full_audit_run.status }}</span>
+    {% for child in full_audit_children %}
+    <span class="pill"><span class="pill-label">{{ child.type|replace('_',' ')|title }}</span><a href="/tasks/{{ child.id }}">#{{ child.id }}</a> {{ child.status }}</span>
+    {% endfor %}
+  </div>
+  {% if full_audit_run.status in ['queued','running'] or full_audit_children|selectattr('status','in',['queued','running'])|list %}
+  <div class="subtle" style="color:var(--amber);">The workflow is still running. This page can be refreshed to see each stage advance.</div>
+  {% elif full_audit_run.status == 'failed' %}
+  <div class="subtle" style="color:var(--red);">The workflow coordinator failed. Open the parent task for the deterministic error and first-aid action.</div>
+  {% else %}
+  <div class="subtle" style="color:var(--green);">The latest workflow coordinator completed. Review the child results below.</div>
+  {% endif %}
+  {% else %}
+  <div class="subtle">No full workflow has been run for this engagement yet. Start here after checking the measurement setup.</div>
+  {% endif %}
+</div>
+</div>
+
+<div class="report-section">
+<div class="card" id="measurement-setup">
   <div class="card-header">
     <span class="card-title">SEO Measurement</span>
     <button class="btn btn-sm btn-primary" type="button" onclick="queueSeoMeasurement()">Run fresh measurement</button>
   </div>
+  <details open class="mt-2">
+    <summary class="card-title" style="font-size:12px;cursor:pointer">Measurement setup and access checklist</summary>
+    <div class="how-to mt-2">
+      <p class="subtle" style="margin-top:0;">These are identifiers, not secret values. Save them once and reuse this workflow for every later measurement.</p>
+      <form id="measurementSetupForm" onsubmit="saveMeasurementSetup(event);return false;">
+        <label>GSC property
+          <input name="gsc_property" value="{{ measurement_setup.gsc_property }}" placeholder="sc-domain:example.com" style="width:100%;margin-top:4px;">
+        </label>
+        <label class="mt-1">GA4 property ID
+          <input name="ga4_property_id" value="{{ measurement_setup.ga4_property_id }}" placeholder="123456789" inputmode="numeric" style="width:100%;margin-top:4px;">
+        </label>
+        <label class="mt-1">GA4 measurement ID
+          <input name="ga4_measurement_id" value="{{ measurement_setup.ga4_measurement_id }}" placeholder="G-XXXXXXXXXX" style="width:100%;margin-top:4px;">
+        </label>
+        <div class="gap-2 mt-2">
+          <button class="btn btn-sm" type="submit">Save setup</button>
+          <button class="btn btn-sm btn-primary" type="button" onclick="saveMeasurementSetup(null,true)">Save and run measurement</button>
+        </div>
+        <div id="measurementSetupStatus" class="subtle mt-1"></div>
+      </form>
+      <div class="mt-2" style="border-top:1px solid var(--border);padding-top:10px;">
+        <b>External access checklist</b>
+        <ol style="margin:6px 0 0;padding-left:20px;">
+          <li>In Search Console, add the service account <span class="mono">{{ gsc_service_account_email }}</span> as a user for this property.</li>
+          <li>In Google Cloud project <span class="mono">gsc-api-project-505616</span>, enable Search Console API and Google Analytics Data API.</li>
+          <li>In GA4 Admin, add the same service account as Viewer for the numeric property ID above.</li>
+          <li>Install the GA4 tag using the measurement ID, then publish through the engagement's normal deployment flow.</li>
+          <li>Save this setup and run a measurement. The report will show available, partial, or unavailable evidence.</li>
+        </ol>
+        <div class="gap-2 mt-2">
+          <a class="btn btn-xs" href="https://search.google.com/search-console" target="_blank" rel="noopener">Open Search Console &#8599;</a>
+          <a class="btn btn-xs" href="https://console.cloud.google.com/apis/library" target="_blank" rel="noopener">Open Google Cloud APIs &#8599;</a>
+          <a class="btn btn-xs" href="https://analytics.google.com/" target="_blank" rel="noopener">Open GA4 &#8599;</a>
+        </div>
+      </div>
+    </div>
+  </details>
   {% if seo_audit %}
   {% set seo_sources = seo_data.get('sources') or {} %}
   {% set crawl = seo_sources.get('crawl') or {} %}
@@ -233,7 +299,7 @@
       <span class="cap-icon">&#128274;</span>
       <span class="cap-body">
         <span class="cap-name">Google Search Console</span>
-        <span class="cap-metric">Requires DNS TXT verification &mdash; ask client to add the property</span>
+        <span class="cap-metric">Configure the property above, grant the Agency service account, then rerun measurement</span>
       </span>
     </div>
     {% set wp = cap_map.get('wp_rest_api') %}
@@ -256,6 +322,59 @@
   {% else %}
   <p class="empty">No defend_audit run for this brand's project. Capabilities will appear here after a project audit.</p>
   {% endif %}
+</div>
+</div>
+
+{# ── Section 2b: Deployment-neutral implementation playbook ── #}
+<div class="report-section">
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Implementation playbook</span>
+    <span class="subtle">deployment-neutral next steps</span>
+  </div>
+  <p class="subtle" style="margin-top:0;">These steps work whether the engagement has a repository, a CMS, a hosted builder, or no code access. Use the engagement's normal review and deployment process, then rerun the relevant audit.</p>
+  <div class="card-list">
+    {% set homepage_cap = cap_map.get('homepage') %}
+    {% set meta_cap = cap_map.get('seo_meta_description') %}
+    {% set social_cap = cap_map.get('social_sharing') %}
+    {% set schema_cap = cap_map.get('structured_data') %}
+    {% set blog_cap = cap_map.get('blog') %}
+    {% set feed_cap = cap_map.get('rss_feed') %}
+    {% if (schema_cap and schema_cap.status != 'available') or seo_data.get('findings')|selectattr('rule','in',['missing_jsonld','invalid_jsonld'])|list %}
+    <div class="card-list-item">
+      <div class="card-list-main"><b>Add valid JSON-LD structured data</b><span class="badge high">high</span></div>
+      <div class="card-list-sub">Add Organization and WebSite schema appropriate to the business, plus Product, FAQ, or Article schema only where the page genuinely supports it. Validate with <a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener">Rich Results Test &#8599;</a>, publish through the normal engagement flow, then rerun SEO measurement.</div>
+    </div>
+    {% endif %}
+    {% if (meta_cap and meta_cap.status != 'available') or seo_data.get('findings')|selectattr('rule','in',['missing_title','missing_description','h1_count','canonical_mismatch'])|list %}
+    <div class="card-list-item">
+      <div class="card-list-main"><b>Repair page metadata and headings</b><span class="badge high">high</span></div>
+      <div class="card-list-sub">Give each indexable page a unique title and description, keep one meaningful H1, and set the canonical URL to the page's preferred public URL. Verify the rendered HTML, publish normally, and rerun the crawl.</div>
+    </div>
+    {% endif %}
+    {% if social_cap and social_cap.status != 'available' %}
+    <div class="card-list-item">
+      <div class="card-list-main"><b>Complete social sharing metadata</b><span class="badge medium">medium</span></div>
+      <div class="card-list-sub">Add stable Open Graph title, description, URL, and image values, plus a Twitter card. Test one shared URL in a social debugger and rerun the defend audit.</div>
+    </div>
+    {% endif %}
+    {% if blog_cap and blog_cap.status != 'available' %}
+    <div class="card-list-item">
+      <div class="card-list-main"><b>Create a blog or resource route</b><span class="badge medium">medium</span></div>
+      <div class="card-list-sub">Choose the engagement's publishing owner, define the URL and editorial workflow, create the listing and detail templates, add navigation and an XML sitemap entry, then publish one useful article before rerunning the audit.</div>
+    </div>
+    {% endif %}
+    {% if feed_cap and feed_cap.status != 'available' %}
+    <div class="card-list-item">
+      <div class="card-list-main"><b>Publish an RSS or Atom feed</b><span class="badge low">low</span></div>
+      <div class="card-list-sub">Expose a valid feed for published posts, reference it from the page head where appropriate, and validate the XML before rerunning the defend audit.</div>
+    </div>
+    {% endif %}
+    <div class="card-list-item">
+      <div class="card-list-main"><b>Re-verify the public result</b><span class="badge badge-dim">always</span></div>
+      <div class="card-list-sub">Use the full audit button after publishing. It keeps the original evidence, reruns AI visibility and competitor analysis, and records which SEO findings were added or resolved.</div>
+    </div>
+  </div>
 </div>
 </div>
 
@@ -644,14 +763,52 @@ function rptImpl(form, sid) {
 }
 async function queueSeoMeasurement() {
   var button = document.querySelector('[onclick="queueSeoMeasurement()"]');
+  var status = document.getElementById('measurementSetupStatus');
   if (button) button.disabled = true;
+  if (status) status.textContent = 'Queueing measurement...';
   try {
     var response = await fetch('/api/brands/{{ brand.id }}/seo-measurement', {method:'POST'});
     var data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to queue measurement');
-    alert(data.deduplicated ? 'Measurement already queued (task #'+data.task_id+')' : 'Measurement queued (task #'+data.task_id+')');
-  } catch (error) { alert(error.message); }
+    if (status) status.innerHTML = (data.deduplicated ? 'Measurement already queued' : 'Measurement queued') + ' · <a href="/tasks/'+data.task_id+'">task #'+data.task_id+'</a>. The report will update when it completes.';
+  } catch (error) { if (status) { status.textContent = error.message; status.style.color = 'var(--red)'; } }
   finally { if (button) button.disabled = false; }
+}
+async function saveMeasurementSetup(event, runAfter) {
+  if (event) event.preventDefault();
+  var form = document.getElementById('measurementSetupForm');
+  var status = document.getElementById('measurementSetupStatus');
+  var buttons = form ? form.querySelectorAll('button') : [];
+  buttons.forEach(function(button){ button.disabled = true; });
+  if (status) { status.style.color = ''; status.textContent = 'Saving measurement setup...'; }
+  try {
+    var response = await fetch('/api/brands/{{ brand.id }}/measurement-setup', {
+      method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams(new FormData(form))
+    });
+    var data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to save setup');
+    if (status) status.textContent = 'Setup saved.';
+    if (runAfter) await queueSeoMeasurement();
+  } catch (error) {
+    if (status) { status.textContent = error.message; status.style.color = 'var(--red)'; }
+  } finally { buttons.forEach(function(button){ button.disabled = false; }); }
+}
+async function queueFullMarketingAudit() {
+  var button = document.querySelector('#marketing-workflow button');
+  var status = document.getElementById('measurementSetupStatus');
+  if (button) button.disabled = true;
+  if (status) { status.style.color = ''; status.textContent = 'Queueing full marketing audit...'; }
+  try {
+    var response = await fetch('/api/brands/{{ brand.id }}/full-audit', {method:'POST'});
+    var data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to queue full audit');
+    if (status) status.innerHTML = (data.deduplicated ? 'Full audit already queued' : 'Full audit queued') + ' · <a href="/tasks/'+data.task_id+'">parent task #'+data.task_id+'</a>.';
+    setTimeout(function(){ location.reload(); }, 1800);
+  } catch (error) {
+    if (status) { status.textContent = error.message; status.style.color = 'var(--red)'; }
+    if (button) button.disabled = false;
+  }
 }
 </script>
 {% endblock %}

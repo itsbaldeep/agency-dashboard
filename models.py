@@ -528,7 +528,19 @@ def get_engagement_detail(ref_type, ref_id):
                     e["intake_params"] = {}
 
         elif ref_type == "project":
-            cur.execute("SELECT * FROM projects WHERE id=%s", (ref_id,))
+            cur.execute("""
+                SELECT p.*, b.id AS brand_id, b.name AS brand_name, b.slug AS brand_slug,
+                       b.access_tier AS brand_access_tier
+                FROM projects p
+                LEFT JOIN LATERAL (
+                    SELECT id, name, slug, access_tier
+                    FROM brands
+                    WHERE project_id=p.id
+                    ORDER BY id DESC
+                    LIMIT 1
+                ) b ON true
+                WHERE p.id=%s
+            """, (ref_id,))
             row = cur.fetchone()
             if not row:
                 return None
@@ -543,8 +555,9 @@ def get_engagement_detail(ref_type, ref_id):
             e["project_id"] = e["id"]
             e["project_name"] = e["name"]
             e["project_state"] = e.get("state", "building")
-            e["brand_id"] = None
-            e["brand_name"] = None
+            e["brand_id"] = row.get("brand_id")
+            e["brand_name"] = row.get("brand_name")
+            e["access_tier"] = row.get("brand_access_tier", e.get("access_tier", "0"))
 
         elif ref_type == "brand":
             cur.execute("""

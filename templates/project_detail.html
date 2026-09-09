@@ -6,7 +6,13 @@
     {{ project['repo_name'] or '—' }} &middot; {{ project['base_branch'] or '—' }}
     <span class="badge {{ 'ok' if project['agent_allowed'] else 'no' }}">{% if project['agent_allowed'] %}agent{% else %}no-agent{% endif %}</span>
     {% if project['repo_url'] %}
-      <a href="{{ project['repo_url'] }}" target="_blank" rel="noopener">{{ 'Website' if not project['agent_allowed'] else 'Repository' }}</a>
+      <a href="{{ project['repo_url'] }}" target="_blank" rel="noopener">Repository</a>
+    {% endif %}
+    {% if public_site_url %}
+      <a href="https://{{ public_site_url }}" target="_blank" rel="noopener">Public site</a>
+    {% endif %}
+    {% if brand %}
+      <a href="/engagements/brand/{{ brand['id'] }}/report">Marketing report</a>
     {% endif %}
   </div>
 </div>
@@ -166,9 +172,12 @@
   <div class="card-title mb-2">Actions</div>
 
   <form method="post" action="/projects/{{ project['id'] }}/audit" style="margin-bottom:14px;">
-    <button class="btn" {% if not (project.get('repo_url') or '').startswith('http') %}disabled title="Enable Run Audit by setting a repo_url starting with http"{% endif %} type="submit">Run Audit</button>
-    {% if not (project.get('repo_url') or '').startswith('http') %}
-    <span class="subtle">Disabled — repo_url must start with http.</span>
+    <div class="mb-2"><b>Full marketing audit</b></div>
+    <p class="subtle" style="margin-top:0;">Audits the public site, AI visibility, competitors, and SEO measurement. Repository access is not required.</p>
+    <input type="url" name="website_url" value="{% if public_site_url %}https://{{ public_site_url }}{% endif %}" placeholder="https://public-site.example" required style="width:100%;margin-bottom:8px;">
+    <button class="btn btn-primary" type="submit">Run full marketing audit</button>
+    {% if request.args.get('audit_error') %}
+    <div class="subtle" style="color:var(--red);margin-top:8px;">{{ request.args.get('audit_error') }}</div>
     {% endif %}
   </form>
 
