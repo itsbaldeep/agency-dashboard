@@ -55,17 +55,95 @@
     <span class="pill"><span class="pill-label">{{ child.type|replace('_',' ')|title }}</span><a href="/tasks/{{ child.id }}">#{{ child.id }}</a> {{ child.status }}</span>
     {% endfor %}
   </div>
-  {% if full_audit_run.status in ['queued','running'] or full_audit_children|selectattr('status','in',['queued','running'])|list %}
+  {% if full_audit_run.status in ['queued','running','collecting','synthesizing'] or full_audit_children|selectattr('status','in',['queued','running','collecting','synthesizing'])|list %}
   <div class="subtle" style="color:var(--amber);">The workflow is still running. This page can be refreshed to see each stage advance.</div>
   {% elif full_audit_run.status == 'failed' %}
   <div class="subtle" style="color:var(--red);">The workflow coordinator failed. Open the parent task for the deterministic error and first-aid action.</div>
   {% else %}
-  <div class="subtle" style="color:var(--green);">The latest workflow coordinator completed. Review the child results below.</div>
+  <div class="subtle" style="color:var(--green);">The latest workflow coordinator completed. Review the child results and stored assessment below.</div>
   {% endif %}
   {% else %}
   <div class="subtle">No full workflow has been run for this engagement yet. Start here after checking the measurement setup.</div>
   {% endif %}
 </div>
+</div>
+
+<div class="report-section" id="marketing-assessment">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Marketing assessment</span>
+      {% if marketing_assessment %}
+      <span class="badge badge-dim">{{ marketing_assessment.status|replace('_',' ')|title }}</span>
+      {% else %}
+      <span class="badge badge-dim">Not started</span>
+      {% endif %}
+    </div>
+    {% if marketing_assessment %}
+      <div class="subtle" style="margin-top:0;">
+        Assessment <span class="mono">#{{ marketing_assessment.id }}</span>
+        · status <span class="mono">{{ marketing_assessment.status }}</span>
+        {% if marketing_assessment.created_fmt %} · started {{ marketing_assessment.created_fmt }}{% endif %}
+        {% if marketing_assessment.updated_fmt %} · updated {{ marketing_assessment.updated_fmt }}{% endif %}
+      </div>
+      {% if marketing_assessment.report_available and marketing_assessment.status in ['ready', 'partial'] %}
+        {% set assessment_report = marketing_assessment.report %}
+        <div class="chips mt-2">
+          <span class="pill"><span class="pill-label">Strategy</span>{{ 'ready' if marketing_assessment.status == 'ready' else 'partial' }}</span>
+          {% if marketing_assessment.validation.get('valid') is not none %}
+          <span class="pill"><span class="pill-label">Validation</span>{{ 'passed' if marketing_assessment.validation.get('valid') else 'needs review' }}</span>
+          {% endif %}
+        </div>
+        {% if assessment_report.get('executive_summary') or assessment_report.get('summary') %}
+        <div class="mt-2"><b>Executive summary</b><p class="subtle">{{ assessment_report.get('executive_summary') or assessment_report.get('summary') }}</p></div>
+        {% endif %}
+        {% set next_steps = assessment_report.get('actions') or assessment_report.get('next_steps') or assessment_report.get('recommendations') or [] %}
+        {% if next_steps is sequence and next_steps is not string and next_steps %}
+        <div class="mt-2"><b>Recommended next steps</b><ol style="margin:6px 0 0;padding-left:20px;">
+          {% for step in next_steps[:10] %}
+            <li>{% if step is mapping %}
+              <span>{{ step.get('title') or step.get('action') or step.get('recommendation') or step }}</span>
+              {% if step.get('priority') %}<span class="badge badge-dim">{{ step.get('priority') }}</span>{% endif %}
+              {% if step.get('mode') %}<span class="subtle">{{ step.get('mode')|replace('_',' ') }}</span>{% endif %}
+              {% if step.get('detail') %}<div class="subtle">{{ step.get('detail') }}</div>{% endif %}
+              {% if step.get('human_decision_required') %}<div class="subtle" style="color:var(--amber);">Human decision required before execution.</div>{% endif %}
+            {% else %}{{ step }}{% endif %}</li>
+          {% endfor %}
+        </ol></div>
+        {% endif %}
+        {% set report_sources = assessment_report.get('sources') or [] %}
+        {% if report_sources is sequence and report_sources is not string and report_sources %}
+        <details class="mt-2"><summary class="subtle" style="cursor:pointer">Evidence availability and freshness</summary>
+          <div class="table-wrap mt-1"><table><thead><tr><th>Source</th><th>State</th><th>Freshness</th><th>Observed</th></tr></thead><tbody>
+          {% for source in report_sources[:20] %}{% if source is mapping %}<tr>
+            <td>{{ source.get('label') or source.get('key') }}</td><td>{{ source.get('state') or 'unknown' }}</td><td>{{ source.get('freshness') or 'unknown' }}</td><td>{{ source.get('observed_at') or source.get('checked_at') or '—' }}</td>
+          </tr>{% endif %}{% endfor %}
+          </tbody></table></div>
+        </details>
+        {% endif %}
+      {% else %}
+        <div class="subtle mt-2" style="color:{% if marketing_assessment.status == 'failed' %}var(--red){% elif marketing_assessment.status in ['queued','collecting','synthesizing'] %}var(--amber){% else %}var(--text-muted){% endif %};">
+          {% if marketing_assessment.status == 'failed' %}
+            Assessment failed. Review the stage error below before retrying.
+          {% elif marketing_assessment.status in ['queued','collecting','synthesizing'] %}
+            Assessment is {{ marketing_assessment.status|replace('_',' ') }}. The strategy report is pending.
+          {% else %}
+            Assessment report pending. No stored strategy is available yet.
+          {% endif %}
+        </div>
+      {% endif %}
+      {% if marketing_assessment_stages %}
+      <details class="mt-2" open><summary class="subtle" style="cursor:pointer">Source stages</summary>
+        <div class="table-wrap mt-1"><table><thead><tr><th>Stage</th><th>Status</th><th>Required</th><th>Updated</th><th>Error</th></tr></thead><tbody>
+        {% for stage in marketing_assessment_stages %}<tr>
+          <td class="mono">{{ stage.stage_key }}</td><td>{{ stage.status }}</td><td>{{ 'yes' if stage.required else 'no' }}</td><td>{{ stage.updated_fmt or '—' }}</td><td class="detail-cell">{{ stage.error or '—' }}</td>
+        </tr>{% endfor %}
+        </tbody></table></div>
+      </details>
+      {% endif %}
+    {% else %}
+      <p class="empty">No marketing assessment has been queued for this engagement yet.</p>
+    {% endif %}
+  </div>
 </div>
 
 <div class="report-section">

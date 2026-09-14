@@ -170,6 +170,55 @@ def _parse_jsonb(v):
     return v or {}
 
 
+def _load_latest_marketing_assessment(cur, brand_id):
+    """Load the latest persisted assessment without making old installs fail.
+
+    Migration 014 is deliberately optional while dashboard instances are being
+    upgraded.  A missing table, a malformed JSON value, or a partial row must
+    not prevent the existing brand report from rendering.
+    """
+    try:
+        cur.execute(
+            "SELECT id, status, source_manifest, report, validation, created_at, updated_at "
+            "FROM marketing_assessments WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1",
+            (brand_id,),
+        )
+        assessment = cur.fetchone()
+        if not assessment:
+            return None, []
+        assessment = dict(assessment)
+        assessment["source_manifest"] = _parse_jsonb(assessment.get("source_manifest"))
+        assessment["report"] = _parse_jsonb(assessment.get("report"))
+        assessment["validation"] = _parse_jsonb(assessment.get("validation"))
+        if not isinstance(assessment["source_manifest"], dict):
+            assessment["source_manifest"] = {}
+        if not isinstance(assessment["report"], dict):
+            assessment["report"] = {}
+        if not isinstance(assessment["validation"], dict):
+            assessment["validation"] = {}
+        cur.execute(
+            "SELECT s.stage_key, s.required, s.status, s.created_at, s.updated_at, "
+            "t.status AS task_status, t.error AS task_error "
+            "FROM marketing_assessment_stages s "
+            "LEFT JOIN tasks t ON t.id=s.task_id "
+            "WHERE s.assessment_id=%s ORDER BY s.id",
+            (assessment.get("id"),),
+        )
+        stages = []
+        for row in cur.fetchall():
+            stage = dict(row)
+            stage["status"] = stage.get("task_status") or stage.get("status") or "queued"
+            stage["error"] = stage.get("task_error") or ""
+            stage["updated_fmt"] = fmt_ts(stage.get("updated_at"))
+            stages.append(stage)
+        assessment["created_fmt"] = fmt_ts(assessment.get("created_at"))
+        assessment["updated_fmt"] = fmt_ts(assessment.get("updated_at"))
+        assessment["report_available"] = bool(assessment.get("report"))
+        return assessment, stages
+    except Exception:
+        return None, []
+
+
 MEASUREMENT_PROPERTY_TYPES = ("gsc_property", "ga4_property_id", "ga4_measurement_id")
 GSC_SERVICE_ACCOUNT_EMAIL = os.environ.get(
     "AGENCY_GSC_SERVICE_ACCOUNT_EMAIL",
@@ -259,6 +308,8 @@ def brand_report(brand_id):
     repo_url = None
     full_audit_run = None
     full_audit_children = []
+    marketing_assessment = None
+    marketing_assessment_stages = []
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM brands WHERE id=%s", (brand_id,))
@@ -305,6 +356,8 @@ def brand_report(brand_id):
             "summary->>'confidence' as confidence FROM audits WHERE brand_id=%s ORDER BY created_at DESC LIMIT 10",
             (brand_id,))
         audit_history = cur.fetchall()
+
+        marketing_assessment, marketing_assessment_stages = _load_latest_marketing_assessment(cur, brand_id)
     finally:
         conn.close()
 
@@ -468,6 +521,8 @@ def brand_report(brand_id):
                            gsc_service_account_email=GSC_SERVICE_ACCOUNT_EMAIL,
                            full_audit_run=full_audit_run,
                            full_audit_children=full_audit_children,
+                           marketing_assessment=marketing_assessment,
+                           marketing_assessment_stages=marketing_assessment_stages,
                            summary_json=json.dumps(audit_summary, indent=2, default=str) if audit_summary else "")
 
 

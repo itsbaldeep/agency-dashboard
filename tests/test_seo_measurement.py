@@ -68,7 +68,88 @@ class Connection:
         pass
 
 
+class AssessmentCursor:
+    def __init__(self, assessment, stages):
+        self.assessment = assessment
+        self.stages = stages
+        self.sql = ""
+
+    def execute(self, sql, params=()):
+        self.sql = sql
+
+    def fetchone(self):
+        return self.assessment if "FROM marketing_assessments" in self.sql else None
+
+    def fetchall(self):
+        return self.stages if "marketing_assessment_stages" in self.sql else []
+
+
 class SeoMeasurementTests(unittest.TestCase):
+    def test_assessment_loader_is_best_effort_and_includes_stage_errors(self):
+        cursor = AssessmentCursor(
+            {"id": 42, "status": "collecting", "source_manifest": '{"crawl": {"status": "ok"}}',
+             "report": None, "validation": None, "created_at": "2026-09-14T10:00:00+00:00",
+             "updated_at": "2026-09-14T10:05:00+00:00"},
+            [{"stage_key": "crawl", "required": True, "status": "queued", "task_status": "failed",
+              "task_error": "timeout", "updated_at": "2026-09-14T10:04:00+00:00"}],
+        )
+        assessment, stages = dashboard._load_latest_marketing_assessment(cursor, 7)
+        self.assertEqual(assessment["id"], 42)
+        self.assertEqual(assessment["source_manifest"]["crawl"]["status"], "ok")
+        self.assertFalse(assessment["report_available"])
+        self.assertEqual(stages[0]["status"], "failed")
+        self.assertEqual(stages[0]["error"], "timeout")
+
+    def test_assessment_loader_rejects_non_object_report_json(self):
+        cursor = AssessmentCursor(
+            {"id": 42, "status": "ready", "source_manifest": "[]", "report": "[]", "validation": "[]",
+             "created_at": None, "updated_at": None}, [],
+        )
+        assessment, _stages = dashboard._load_latest_marketing_assessment(cursor, 7)
+        self.assertEqual(assessment["report"], {})
+        self.assertEqual(assessment["validation"], {})
+        self.assertFalse(assessment["report_available"])
+
+    def test_assessment_section_never_claims_ready_without_report(self):
+        context = dict(brand={"id": 7, "name": "Brand"}, brand_properties=[], domain="example.test",
+                       audit=None, audit_summary={}, audit_sources=[], audit_history=[], audit_date_fmt="",
+                       suggestions=[], visibility_rows=[], ch_error=False, capabilities=[], content_items=[],
+                       recent_tasks=[], content_by_suggestion={}, task_by_suggestion={}, agent_allowed=False,
+                       repo_url=None, project_id=None, summary_json="", seo_audit=None, seo_summary={}, seo_data={},
+                       marketing_assessment={"id": 42, "status": "ready", "report": {}, "report_available": False,
+                                            "validation": {}, "created_fmt": "2026-09-14 10:00",
+                                            "updated_fmt": "2026-09-14 10:05"},
+                       marketing_assessment_stages=[{"stage_key": "crawl", "status": "failed", "required": True,
+                                                     "updated_fmt": "2026-09-14 10:04", "error": "timeout"}])
+        with dashboard.app.test_request_context("/"):
+            html = dashboard.render_template("brand_report.html", **context)
+        self.assertIn("Assessment report pending", html)
+        self.assertNotIn("Strategy</span>ready", html)
+        self.assertIn("timeout", html)
+
+    def test_assessment_section_renders_typed_actions_and_source_availability(self):
+        context = dict(brand={"id": 7, "name": "Brand"}, brand_properties=[], domain="example.test",
+                       audit=None, audit_summary={}, audit_sources=[], audit_history=[], audit_date_fmt="",
+                       suggestions=[], visibility_rows=[], ch_error=False, capabilities=[], content_items=[],
+                       recent_tasks=[], content_by_suggestion={}, task_by_suggestion={}, agent_allowed=False,
+                       repo_url=None, project_id=None, summary_json="", seo_audit=None, seo_summary={}, seo_data={},
+                       marketing_assessment={"id": 42, "status": "partial", "report_available": True,
+                                            "validation": {"valid": True}, "created_fmt": "2026-09-14 10:00",
+                                            "updated_fmt": "2026-09-14 10:05", "report": {
+                                                "actions": [{"title": "Connect Search Console", "priority": "high",
+                                                             "mode": "human", "detail": "Grant viewer access.",
+                                                             "human_decision_required": True}],
+                                                "sources": [{"label": "Search Console", "state": "not_configured",
+                                                             "freshness": "unknown", "checked_at": "2026-09-14T10:00:00Z"}],
+                                            }}, marketing_assessment_stages=[])
+        with dashboard.app.test_request_context("/"):
+            html = dashboard.render_template("brand_report.html", **context)
+        self.assertIn("Connect Search Console", html)
+        self.assertIn("Grant viewer access.", html)
+        self.assertIn("Human decision required before execution", html)
+        self.assertIn("Evidence availability and freshness", html)
+        self.assertIn("not_configured", html)
+
     def test_report_separates_ai_and_seo_latest_audits(self):
         initial = Cursor(rows={
             "brand": {"id": 7, "name": "Brand", "project_id": None},

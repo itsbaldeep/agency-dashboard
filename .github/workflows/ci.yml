@@ -16,3 +16,4 @@ jobs:
       - run: python3 -m py_compile app.py models.py
       - run: pip install flask psycopg2-binary markdown
       - run: python3 -m py_compile app.py
+      - run: python3 -m unittest discover -s tests -p 'test_*.py'
