@@ -170,6 +170,149 @@ def _parse_jsonb(v):
     return v or {}
 
 
+def _growth_number(value):
+    """Return a finite non-negative number, or None for unavailable data."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0 or number != number or number in (float("inf"), float("-inf")):
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _growth_window(raw, fallback_name):
+    """Normalize one window from the versioned growth collector contract."""
+    raw = raw if isinstance(raw, dict) else {}
+    start = raw.get("start_date")
+    end = raw.get("end_date")
+    valid = False
+    try:
+        start_date = datetime.fromisoformat(str(start)).date()
+        end_date = datetime.fromisoformat(str(end)).date()
+        valid = (end_date - start_date).days == 27
+    except (TypeError, ValueError):
+        pass
+    return {
+        "name": fallback_name,
+        "start": start,
+        "end": end,
+        "valid": valid,
+    }
+
+
+def _growth_source_window(source, period):
+    source = source if isinstance(source, dict) else {}
+    windows = source.get("windows") if isinstance(source.get("windows"), dict) else {}
+    item = windows.get(period) if isinstance(windows.get(period), dict) else {}
+    metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) and item.get("status") == "available" else {}
+    def metric(key):
+        return _growth_number(metrics.get(key))
+    return {
+        "status": item.get("status") or "source_unavailable",
+        "impressions": metric("impressions"),
+        "clicks": metric("clicks"),
+        "users": metric("totalUsers"),
+        "sessions": metric("sessions"),
+        "keyEvents": metric("keyEvents"),
+    }
+
+
+def _normalise_growth_report(seo_data):
+    """Validate the deterministic growth contract before Jinja renders it.
+
+    Growth is deliberately an adapter at the presentation boundary. Missing,
+    malformed, or old SEO records become an explicit unavailable state, never
+    fabricated zeroes. It accepts the canonical ``raw_data['growth']`` shape
+    only; unsupported schemas require a fresh measurement.
+    """
+    unavailable = {
+        "status": "unavailable",
+        "reason": "Run SEO measurement to collect comparable growth data",
+        "current": {**_growth_window({}, "Current 28 days"), "gsc": {}, "ga4": {}},
+        "prior": {**_growth_window({}, "Prior 28 days"), "gsc": {}, "ga4": {}},
+        "comparison": {"status": "unavailable", "reason": "No comparable measurement windows"},
+        "followups": [],
+        "freshness": {"captured_at": None},
+    }
+    if not isinstance(seo_data, dict) or not isinstance(seo_data.get("growth"), dict):
+        return unavailable
+    growth = seo_data["growth"]
+    if growth.get("schema_version") != 1:
+        return unavailable
+    windows = growth.get("windows") if isinstance(growth.get("windows"), dict) else {}
+    sources = growth.get("sources") if isinstance(growth.get("sources"), dict) else {}
+    current = {**_growth_window(windows.get("current"), "Current 28 days"),
+               "gsc": _growth_source_window(sources.get("gsc"), "current"),
+               "ga4": _growth_source_window(sources.get("ga4"), "current")}
+    prior = {**_growth_window(windows.get("previous"), "Previous 28 days"),
+             "gsc": _growth_source_window(sources.get("gsc"), "previous"),
+             "ga4": _growth_source_window(sources.get("ga4"), "previous")}
+    if not current["valid"] or not prior["valid"]:
+        unavailable["reason"] = "Run SEO measurement to collect valid 28-day comparison windows"
+        return unavailable
+    try:
+        current_start = datetime.fromisoformat(str(current["start"])).date()
+        prior_end = datetime.fromisoformat(str(prior["end"])).date()
+    except (TypeError, ValueError):
+        return unavailable
+    if (current_start - prior_end).days != 1:
+        unavailable["reason"] = "Run SEO measurement to collect non-overlapping comparison windows"
+        return unavailable
+    comparison = {}
+    for source_name in ("gsc", "ga4"):
+        comparison[source_name] = {}
+        keys = ("impressions", "clicks") if source_name == "gsc" else ("users", "sessions", "keyEvents")
+        for key in keys:
+            now, before = current[source_name][key], prior[source_name][key]
+            if now is None or before is None:
+                continue
+            change = now - before
+            comparison[source_name][key] = {
+                "trend": ("emerging" if now else "inconclusive") if before == 0 else "up" if change > 0 else "down" if change < 0 else "flat",
+                "percent": round(change / before * 100, 2) if before else None,
+            }
+    source_states = []
+    for name in ("gsc", "ga4"):
+        source = sources.get(name) if isinstance(sources.get(name), dict) else {}
+        state = source.get("state", "source_unavailable")
+        if any(period[name]["status"] != "available" for period in (current, prior)):
+            state = "source_unavailable"
+        source_states.append(state)
+    available_states = [state for state in source_states if state in {"available", "insufficient_evidence"}]
+    if not available_states:
+        comparison_status = "unavailable"
+    elif len(available_states) != len(source_states):
+        comparison_status = "partial"
+    else:
+        comparison_status = growth.get("confidence") if growth.get("confidence") in {"available", "insufficient_evidence"} else "insufficient_evidence"
+    reason = "Insufficient evidence to call a reliable trend." if comparison_status == "insufficient_evidence" else None
+    comparison = {
+        "status": comparison_status,
+        "reason": reason,
+        "deltas": comparison,
+    }
+    followups = growth.get("recommendations") or []
+    if not isinstance(followups, list):
+        followups = []
+    captured_at = growth.get("captured_at") or seo_data.get("captured_at")
+    return {
+        "status": growth.get("status") if growth.get("status") != "source_unavailable" else "unavailable",
+        "reason": growth.get("reason"),
+        "current": current,
+        "prior": prior,
+        "comparison": comparison,
+        "followups": [item for item in followups if isinstance(item, (str, dict))][:10],
+        "freshness": {
+            "captured_at": captured_at,
+            "gsc_timezone": sources["gsc"].get("date_timezone") if isinstance(sources.get("gsc"), dict) else None,
+            "ga4_timezone": sources["ga4"].get("date_timezone") if isinstance(sources.get("ga4"), dict) else None,
+        },
+    }
+
+
 def _load_latest_marketing_assessment(cur, brand_id):
     """Load the latest persisted assessment without making old installs fail.
 
@@ -375,6 +518,7 @@ def brand_report(brand_id):
         seo_summary = {}
     if not isinstance(seo_data, dict):
         seo_data = {}
+    growth_report = _normalise_growth_report(seo_data)
 
     capabilities = []
     if project_id:
@@ -509,6 +653,7 @@ def brand_report(brand_id):
                            domain=domain, competitors=competitors, audit=audit,
                            audit_summary=audit_summary, audit_sources=audit_sources,
                            seo_audit=seo_audit, seo_summary=seo_summary, seo_data=seo_data,
+                           growth_report=growth_report,
                            audit_history=audit_history, audit_date_fmt=audit_date_fmt,
                            suggestions=suggestions, visibility_rows=visibility_rows,
                            ch_error=ch_error, capabilities=capabilities,

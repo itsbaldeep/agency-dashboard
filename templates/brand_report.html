@@ -147,6 +147,10 @@
 </div>
 
 <div class="report-section">
+  {% if growth_report is defined %}{% include "fragments/growth_report.html" %}{% endif %}
+</div>
+
+<div class="report-section">
 <div class="card" id="measurement-setup">
   <div class="card-header">
     <span class="card-title">SEO Measurement</span>
