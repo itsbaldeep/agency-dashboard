@@ -106,6 +106,15 @@ class GrowthReportTests(unittest.TestCase):
         data["windows"]["previous"] = {"start_date": "2026-06-01", "end_date": "2026-06-28"}
         self.assertEqual(dashboard._normalise_growth_report({"growth": data})["status"], "unavailable")
 
+    def test_missing_history_is_not_an_access_failure(self):
+        data = growth_fixture()
+        data["sources"]["ga4"]["state"] = "historical_unavailable"
+        data["sources"]["ga4"]["windows"]["previous"] = {"status": "source_unavailable"}
+        report = dashboard._normalise_growth_report({"growth": data})
+        self.assertEqual(report["current"]["ga4"]["users"], 12)
+        self.assertEqual(report["comparison"]["status"], "partial")
+        self.assertIn("historical coverage is incomplete", self.render(report))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Content calendar</h1>
+  <div class="sub">Plan evidence-led content and queue bounded research for review.</div>
+  <a href="/content" class="btn">Back to content</a>
+</div>
+<p class="subtle">Dates are planning targets, not automatic schedules. Research may prepare an outline; composition and publication retain their separate review gates.</p>
+<p id="calendar-message" role="status" aria-live="polite"></p>
+
+{% if not available %}
+<div class="card"><p class="empty">Content calendar is not installed yet. Apply the tracked database migration before creating plans.</p></div>
+{% else %}
+<div class="card mb-3">
+  <div class="card-title mb-2">New plan</div>
+  <form method="post" action="/content/calendar">
+    <div class="form-grid">
+      <label>Brand<select name="brand_id" required><option value="">Choose a brand</option>{% for brand in brands %}<option value="{{ brand.id }}"{% if brand_filter and brand_filter|string == brand.id|string %} selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
+      <label>Planned date<input type="date" name="planned_date" required></label>
+      <label>Working title<input name="title" maxlength="200" required></label>
+      <label>Target keyword<input name="target_keyword" maxlength="200" required></label>
+      <label>Audience<input name="audience" maxlength="200" required></label>
+      <label>Success metric<select name="success_metric" required><option value="gsc_clicks">GSC clicks</option><option value="ga4_users">GA4 users</option><option value="ga4_key_events">GA4 key events</option></select></label>
+    </div>
+    <label class="mt-2">Hypothesis<textarea name="hypothesis" maxlength="1000" required placeholder="What change do we expect, and why?"></textarea></label>
+    <label class="mt-2">Competitor URLs <span class="subtle">(one public HTTPS URL per line, required before research)</span><textarea name="competitor_urls" placeholder="https://competitor.example/article"></textarea></label>
+    <div class="form-grid mt-2">
+      <label>Evidence audit ID <input name="evidence_audit_id" inputmode="numeric"></label>
+      <label>Evidence note <input name="evidence_note" maxlength="2000"></label>
+    </div>
+    <button class="btn btn-primary mt-2" type="submit">Save planned item</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-title">Planned content</span><span class="subtle">{{ plans|length }} shown, maximum 200</span></div>
+  {% if plans %}
+  <div class="table-wrap"><table><thead><tr><th>Plan</th><th>Brand</th><th>Target</th><th>Date</th><th>Metric</th><th>Status</th><th>Research</th></tr></thead><tbody>
+  {% for plan in plans %}<tr>
+    <td><b>{{ plan.title }}</b><div class="subtle">Audience: {{ plan.audience }}</div><div>{{ plan.hypothesis }}</div>{% if plan.evidence_audit_id or plan.evidence_note %}<div class="subtle">{% if plan.evidence_audit_id %}Evidence audit #{{ plan.evidence_audit_id }}: {% endif %}{{ plan.evidence_note }}</div>{% endif %}</td>
+    <td>{{ plan.brand_name }}</td><td class="detail-cell">{{ plan.target_keyword }}{% if plan.status == 'planned' %}<details><summary>Research sources</summary><form method="post" action="/content/calendar/{{ plan.id }}/sources"><label>Public HTTPS competitor URLs<textarea name="competitor_urls" required>{{ plan.competitor_urls|join('\n') }}</textarea></label><button class="btn btn-xs" type="submit">Save sources</button></form></details>{% endif %}</td><td class="mono">{{ plan.planned_date or '-' }}</td><td>{{ plan.success_metric }}</td><td><span class="badge badge-dim">{{ plan.status }}</span></td>
+    <td>{% if plan.task_id %}<a href="/tasks/{{ plan.task_id }}">Task #{{ plan.task_id }} and results</a><div class="subtle">{{ plan.task_status or 'queued' }}</div>{% elif plan.status == 'planned' %}<form method="post" action="/content/calendar/{{ plan.id }}/research"><button class="btn btn-xs btn-primary" type="submit">Queue research</button></form><form method="post" action="/content/calendar/{{ plan.id }}/cancel" class="mt-1"><button class="btn btn-xs" type="submit">Cancel</button></form>{% else %}-{% endif %}</td>
+  </tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="empty">No content plans yet.</p>{% endif %}
+</div>
+{% endif %}
+<script>
+document.querySelectorAll('form[action^="/content/calendar"]').forEach(function(form) {
+  form.addEventListener('submit', async function(event) {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    const message = document.getElementById('calendar-message');
+    button.disabled = true;
+    try {
+      const response = await fetch(form.action, {method: 'POST', body: new FormData(form)});
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Request failed');
+      window.location.reload();
+    } catch (error) {
+      message.textContent = error.message || 'Request failed';
+      button.disabled = false;
+    }
+  });
+});
+</script>
+{% endblock %}

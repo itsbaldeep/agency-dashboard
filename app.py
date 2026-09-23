@@ -17,8 +17,10 @@ import markdown
 import psycopg2.extras
 
 import models
+from content_calendar import content_calendar
 
 app = Flask(__name__)
+app.register_blueprint(content_calendar)
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]
@@ -278,8 +280,10 @@ def _normalise_growth_report(seo_data):
     for name in ("gsc", "ga4"):
         source = sources.get(name) if isinstance(sources.get(name), dict) else {}
         state = source.get("state", "source_unavailable")
-        if any(period[name]["status"] != "available" for period in (current, prior)):
+        if current[name]["status"] != "available":
             state = "source_unavailable"
+        elif prior[name]["status"] != "available":
+            state = "historical_unavailable"
         source_states.append(state)
     available_states = [state for state in source_states if state in {"available", "insufficient_evidence"}]
     if not available_states:
@@ -289,6 +293,8 @@ def _normalise_growth_report(seo_data):
     else:
         comparison_status = growth.get("confidence") if growth.get("confidence") in {"available", "insufficient_evidence"} else "insufficient_evidence"
     reason = "Insufficient evidence to call a reliable trend." if comparison_status == "insufficient_evidence" else None
+    if "historical_unavailable" in source_states:
+        reason = "Current observations are available, but historical coverage is incomplete. No trend can be established for those sources; this does not itself indicate an access failure."
     comparison = {
         "status": comparison_status,
         "reason": reason,
