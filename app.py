@@ -1647,7 +1647,7 @@ PUBLICATION_COLUMNS = """
  (SELECT c.intake_params->'publication' FROM clients c WHERE c.brand_id=ci.brand_id
   ORDER BY c.id DESC LIMIT 1) AS publication_config,
  EXISTS(SELECT 1 FROM services svc JOIN brands pb ON pb.project_id=svc.project_id
-        WHERE pb.id=ci.brand_id AND svc.container LIKE '%-ghost-%') AS ghost_service
+        WHERE pb.id=ci.brand_id AND position('-ghost-' in svc.container)>0) AS ghost_service
 """
 
 
