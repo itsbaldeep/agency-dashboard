@@ -539,6 +539,18 @@ details.card[open] > summary:before{content:"\25BE "}
 .content-preview-body details.faq summary::-webkit-details-marker{color:var(--accent)}
 .content-preview-body .lead{font-size:15px;color:var(--text);border-left:3px solid var(--accent);padding-left:12px;margin:12px 0}
 
+/* Keep the article readable, rather than the review controls sticky, on phones. */
+@media(max-width:640px){
+  .content-actionbar{position:static;padding:10px;gap:8px;margin-bottom:10px}
+  .content-actionbar-info{width:100%;gap:6px}
+  .content-actionbar-title{max-width:calc(100% - 28px);white-space:normal;font-size:14px}
+  .content-actionbar-actions{display:flex;flex-wrap:wrap;gap:6px;min-width:0;flex-shrink:1}
+  .content-preview-body{padding:12px;min-width:0}
+  #visual-editor{padding:12px}
+  #visual-form,#visual-form fieldset,#visual-form label{min-width:0}
+  #visual-form input,#visual-form select,#visual-form textarea{max-width:100%;font-size:16px}
+}
+
 /* ── Content list clickable rows ─────────────────────────── */
 .content-row{display:block;text-decoration:none;color:inherit}
 .content-row .suggestion-card{cursor:pointer}
