@@ -9,6 +9,7 @@
     {% if updated_fmt %}<span class="content-actionbar-date subtle">{{ updated_fmt }}</span>{% endif %}
   </div>
   <div class="content-actionbar-actions gap-2">
+    {% if published_url %}<a class="btn btn-green" href="{{ published_url }}" target="_blank" rel="noopener noreferrer">View published article</a>{% endif %}
     {% if ci.body or ci.content_blocks %}
     <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
     <a href="/content/{{ ci.id }}/download-html" class="btn btn-sm">Export HTML</a>
@@ -65,6 +66,7 @@ async function approveContent() {
   try {
   var form = document.getElementById('publishForm');
   var payload = Object.fromEntries(new FormData(form).entries());
+  payload.revision = {{ visual_revision|tojson }};
   var r = await fetch('/content/'+publishContentId+'/approve', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   var d = await r.json();
   if (d.ok) { window.location.href='/tasks/'+d.task_id; return; }

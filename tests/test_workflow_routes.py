@@ -182,6 +182,25 @@ class WorkflowRouteTests(unittest.TestCase):
         self.assertFalse(dashboard.publication_context({'publication_config': config,
                          'content_blocks': [{'type': 'editorial_visual'}]})['ready'])
 
+    def test_ghost_approval_binds_exact_reviewed_revision(self):
+        import publication_settings
+        from ghost_publisher import content_digest
+        item = {'id': 23, 'status': 'draft', 'ghost_service': True, 'publication_project_id': 30,
+                'title': 'Reviewed title', 'body': 'Reviewed body', 'content_blocks': [], 'structured': {}}
+        config = {'type': 'ghost', 'enabled': True, 'base_url': 'https://example.com/blog/'}
+        with mock.patch.object(publication_settings, 'project_destination', return_value=config):
+            conn = FakeConnection([item])
+            with mock.patch.object(dashboard.models, 'db', return_value=conn):
+                response = self.client.post('/content/23/approve', json={'revision': 'stale'})
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(conn.commits, 0)
+            conn = FakeConnection([item, {'id': 46}])
+            with mock.patch.object(dashboard.models, 'db', return_value=conn), mock.patch.object(dashboard.models, 'ch_trace'):
+                response = self.client.post('/content/23/approve', json={'revision': dashboard.content_revision(item)})
+            self.assertEqual(response.status_code, 200)
+            inserted = next(params for sql, params in conn.cursor_value.calls if sql.startswith('INSERT'))
+            self.assertEqual(json.loads(inserted[0])['approved_digest'], content_digest(item))
+
     def test_alert_fragment_renders_when_snapshot_is_unavailable(self):
         with mock.patch.object(dashboard.models, "get_combined_alert_state", return_value={
             "stale": True,

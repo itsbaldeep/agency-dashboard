@@ -1644,6 +1644,7 @@ def _render_content_body(ci, item_id, conn, cur):
 
 
 PUBLICATION_COLUMNS = """
+ (SELECT pb.project_id FROM brands pb WHERE pb.id=ci.brand_id) AS publication_project_id,
  (SELECT c.intake_params->'publication' FROM clients c WHERE c.brand_id=ci.brand_id
   ORDER BY c.id DESC LIMIT 1) AS publication_config,
  EXISTS(SELECT 1 FROM services svc JOIN brands pb ON pb.project_id=svc.project_id
@@ -1655,6 +1656,11 @@ def publication_context(item):
     """Describe configured capability, never mistake CMS presence for an adapter."""
     config = _parse_jsonb(item.get('publication_config'))
     config = config if isinstance(config, dict) else {}
+    sys.path.insert(0, '/home/agency/agency-os/scripts')
+    from publication_settings import project_destination
+    connection = project_destination(item.get('publication_project_id'))
+    if connection:
+        config = connection
     driver = str(config.get('type') or '').lower()
     name = 'Ghost' if item.get('ghost_service') or driver == 'ghost' else driver.title() or 'Not configured'
     ready = driver == 'wordpress' and all(isinstance(config.get(k), str) and config[k].strip()
@@ -1662,11 +1668,12 @@ def publication_context(item):
     ready = bool(ready and config['base_url'].startswith('https://'))
     message = 'Publishing is not connected for this project. Configure its publishing integration once, not for each article.'
     if name == 'Ghost':
-        ready = False
-        message = 'This project uses Ghost. Dashboard-to-Ghost publishing is not connected yet. No WordPress details are needed. You can export the draft for manual review in the blog editor.'
+        ready = bool(config.get('type') == 'ghost' and config.get('enabled'))
+        message = ('Publishes this reviewed draft to the project’s Ghost blog. No email or newsletter will be sent.' if ready else
+                   'This project uses Ghost. Its publishing connection is not enabled yet. You can export the draft for manual review in the blog editor.')
     elif ready:
         message = 'Uses the project’s saved publishing connection. Confirm only when this draft is ready to go public.'
-    if ready and any(isinstance(b, dict) and b.get('type') == 'editorial_visual' for b in item.get('content_blocks') or []):
+    if ready and driver != 'ghost' and any(isinstance(b, dict) and b.get('type') == 'editorial_visual' for b in item.get('content_blocks') or []):
         ready = False
         message = 'The current publishing adapter cannot preserve this draft’s visuals. Export HTML for review; dashboard publication is blocked to avoid losing them.'
     return {'name': name, 'ready': ready, 'message': message,
@@ -1705,6 +1712,13 @@ def content_preview(item_id):
             cur.execute("SELECT id,created_at,result_ref::jsonb->>'after_revision' AS after_revision FROM tasks "
                         "WHERE type='content_visual_edit' AND status='done' AND params->>'content_item_id'=%s ORDER BY id DESC LIMIT 8", (str(item_id),))
             visual_history = cur.fetchall()
+        published_url = ''
+        if ci.get('status') == 'published' and ci.get('publish_task_id'):
+            cur.execute("SELECT result_ref FROM tasks WHERE id=%s AND type='publish_content' AND status='done'", (ci['publish_task_id'],))
+            receipt_row = cur.fetchone()
+            receipt = _parse_jsonb((receipt_row or {}).get('result_ref'))
+            if isinstance(receipt, dict) and str(receipt.get('url', '')).startswith('https://'):
+                published_url = receipt['url']
         return render_template("content_preview.html", active='content',
                                ci=ci, body_html=body_html,
                                target_keyword=target_keyword,
@@ -1712,7 +1726,7 @@ def content_preview(item_id):
                                updated_fmt=updated_fmt, visual_revision=content_revision(ci),
                                visual_blocks=blocks if isinstance(blocks, list) else [],
                                visual_facts=s.get('facts', []) if isinstance(s, dict) else [],
-                               visual_history=visual_history, publication=publication_context(ci))
+                               visual_history=visual_history, publication=publication_context(ci), published_url=published_url)
     finally:
         conn.close()
 
@@ -1796,7 +1810,7 @@ def content_approve(ci_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT ci.id,ci.status,ci.publish_task_id,ci.content_blocks,ci.structured," +
+        cur.execute("SELECT ci.*," +
                     PUBLICATION_COLUMNS + " FROM content_items ci WHERE ci.id=%s FOR UPDATE OF ci", (ci_id,))
         item = cur.fetchone()
         if not item:
@@ -1819,8 +1833,18 @@ def content_approve(ci_id):
         }
         destination = {key: value for key, value in destination.items() if value}
         context = publication_context(item)
-        if item.get('ghost_service') or (not destination and not context['ready']):
+        if (item.get('ghost_service') and not context['ready']) or (not destination and not context['ready']):
             return jsonify(ok=False, error=context['message']), 409
+        approved_digest = None
+        approved_destination = None
+        if context['name'] == 'Ghost':
+            if payload.get('revision') != content_revision(item):
+                return jsonify(ok=False, error='This draft changed. Reload the preview and review it before publishing.'), 409
+            from ghost_publisher import content_digest
+            approved_digest = content_digest(item)
+            from publication_settings import project_destination, destination_digest
+            approved_destination = destination_digest(project_destination(item.get('publication_project_id')))
+            destination = {}
         if item.get("publish_task_id"):
             cur.execute("SELECT id,type,status,params FROM tasks WHERE id=%s FOR UPDATE",
                         (item["publish_task_id"],))
@@ -1831,6 +1855,10 @@ def content_approve(ci_id):
                     return jsonify({"ok": True, "task_id": existing["id"], "existing": True})
                 if existing["status"] == "needs_input":
                     params = _resume_workflow_params("publish_content", _parse_jsonb(existing.get("params")), payload)
+                    if approved_digest:
+                        params['approved_digest'] = approved_digest
+                        params['approved_destination'] = approved_destination
+                        params['destination'] = {}
                     cur.execute(
                         "UPDATE tasks SET params=%s,status='queued',error=NULL,result_ref=NULL,"
                         "started_at=NULL,finished_at=NULL,progress=0,progress_text='resumed with publication input' "
@@ -1843,6 +1871,8 @@ def content_approve(ci_id):
                 if existing["status"] == "failed":
                     return jsonify({"ok": False, "error": "publication may have partially completed; inspect the linked failed task before an explicit re-run"}), 409
         params = json.dumps({"content_item_id": ci_id, "destination": destination,
+                             "approved_digest": approved_digest,
+                             "approved_destination": approved_destination,
                              "instructions": (payload.get("instructions") or "")[:2000]})
         cur.execute(
             "INSERT INTO tasks (type,status,params,triggered_by) "
