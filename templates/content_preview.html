@@ -11,6 +11,7 @@
   <div class="content-actionbar-actions gap-2">
     {% if ci.body or ci.content_blocks %}
     <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
+    <a href="/content/{{ ci.id }}/download-html" class="btn btn-sm">Export HTML</a>
     {% endif %}
     {% if has_image_slots and ci.status in ('draft', 'outline') %}
     <button class="btn btn-sm" onclick="sourceImages({{ ci.id }})">Source images</button>
@@ -19,6 +20,7 @@
     <button class="btn btn-sm btn-green" onclick="openPublish({{ ci.id }})">Approve &amp; Publish</button>
     {% endif %}
     {% if ci.status == 'draft' %}
+    <a class="btn btn-sm" href="#visual-editor">Add or revise visuals</a>
     <button class="btn btn-sm" onclick="regenerateContent({{ ci.id }})">Regenerate</button>
     {% endif %}
     {% if ci.status == 'outline' %}
@@ -30,6 +32,7 @@
   </div>
 </div>
 
+{% if ci.status == 'draft' %}{% include 'content_visual_editor.html' %}{% endif %}
 <div class="content-preview-body">
   {{ body_html|safe }}
 </div>

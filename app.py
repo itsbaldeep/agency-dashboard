@@ -18,9 +18,11 @@ import psycopg2.extras
 
 import models
 from content_calendar import content_calendar
+from content_visuals import content_visuals, revision as content_revision, visual_module
 
 app = Flask(__name__)
 app.register_blueprint(content_calendar)
+app.register_blueprint(content_visuals)
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]
@@ -1620,6 +1622,9 @@ def _render_content_body(ci, item_id, conn, cur):
         except json.JSONDecodeError:
             structured = None
     if structured:
+        if isinstance(structured, dict) and structured.get('blocks') and ci.get('status') == 'outline':
+            # Outlines are review plans, not composed article sections.
+            return banner + render_template('outline_preview.html', ci=ci, outline=structured)
         parts = [f"<h1>{structured.get('title', ci['title'])}</h1>"]
         if structured.get('meta_description'):
             parts.append(f"<p><i>{structured['meta_description']}</i></p>")
@@ -1665,11 +1670,19 @@ def content_preview(item_id):
             isinstance(block, dict) and block.get("type") == "image_slot" for block in blocks
         )
         updated_fmt = fmt_ts(ci.get("updated_at") or ci.get("created_at"))
+        visual_history = []
+        if ci.get('status') == 'draft':
+            cur.execute("SELECT id,created_at,result_ref::jsonb->>'after_revision' AS after_revision FROM tasks "
+                        "WHERE type='content_visual_edit' AND status='done' AND params->>'content_item_id'=%s ORDER BY id DESC LIMIT 8", (str(item_id),))
+            visual_history = cur.fetchall()
         return render_template("content_preview.html", active='content',
                                ci=ci, body_html=body_html,
                                target_keyword=target_keyword,
                                has_image_slots=has_image_slots,
-                               updated_fmt=updated_fmt)
+                               updated_fmt=updated_fmt, visual_revision=content_revision(ci),
+                               visual_blocks=blocks if isinstance(blocks, list) else [],
+                               visual_facts=s.get('facts', []) if isinstance(s, dict) else [],
+                               visual_history=visual_history)
     finally:
         conn.close()
 
@@ -1707,6 +1720,28 @@ def content_images(item_id):
         conn.close()
 
 
+@app.route("/content/<int:ci_id>/download-html")
+def content_download_html(ci_id):
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM content_items WHERE id=%s', (ci_id,))
+        ci = cur.fetchone()
+        if not ci:
+            return 'Not found', 404
+        rendered = _render_content_body(ci, ci_id, conn, cur)
+        response = make_response('<!doctype html><html lang="en"><meta charset="utf-8">'
+                                 '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src https:; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'">'
+                                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                                 '<title>Article review export</title><body>' + rendered + '</body></html>')
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.headers['Content-Disposition'] = f'attachment; filename="content-{ci_id}.html"'
+        response.headers['Content-Security-Policy'] = "default-src 'none'; img-src https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; sandbox"
+        return response
+    finally:
+        conn.close()
+
+
 @app.route("/content/<int:ci_id>/download")
 def content_download(ci_id):
     conn = models.db()
@@ -1731,12 +1766,20 @@ def content_approve(ci_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id,status,publish_task_id FROM content_items WHERE id=%s FOR UPDATE", (ci_id,))
+        cur.execute("SELECT id,status,publish_task_id,content_blocks,structured FROM content_items WHERE id=%s FOR UPDATE", (ci_id,))
         item = cur.fetchone()
         if not item:
             return jsonify({"ok": False, "error": "not found"}), 404
         if item["status"] not in ("draft", "approved", "needs_publish_input", "publish_failed"):
             return jsonify({"ok": False, "error": f"content is {item['status']}, not publishable"}), 409
+        for block in item.get('content_blocks') or []:
+            if isinstance(block, dict) and block.get('type') == 'editorial_visual':
+                try:
+                    if block.get('reviewed') is not True:
+                        raise ValueError('Preview and review every visual before publication')
+                    visual_module().validate_visual(block, (item.get('structured') or {}).get('facts') or [])
+                except (ValueError, TypeError, AttributeError) as exc:
+                    return jsonify(ok=False, error=str(exc)), 409
         destination = {
             "type": (payload.get("destination_type") or "").strip(),
             "base_url": (payload.get("base_url") or "").strip(),
@@ -2108,6 +2151,8 @@ def task_rerun(tid):
         src = cur.fetchone()
         if not src:
             return jsonify({"ok": False, "error": "not found"}), 404
+        if src['type'] in ('content_visual_edit', 'content_visual_undo'):
+            return jsonify(ok=False, error='Visual revisions cannot be replayed. Open the draft visual studio and preview a new edit.'), 409
         try:
             base_params = json.loads(src["params"]) if isinstance(src["params"], str) else (src["params"] or {})
             base_params = dict(base_params) if isinstance(base_params, dict) else {}

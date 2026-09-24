@@ -1,0 +1,62 @@
+<details id="visual-editor" class="card" style="margin:18px 0">
+  <summary><strong>Visual studio</strong> · Add, preview or revise reader-focused visuals</summary>
+  <p>Keep each visual useful. Charts require verified numerical evidence. Editorial examples and comparison guides are labelled, not presented as research. Saving changes only this draft.</p>
+  <form id="visual-form" style="display:grid;gap:12px;max-width:850px">
+    <label>Existing visual
+      <select id="visual-target"><option value="new">Add a new visual</option>
+      {% for block in visual_blocks %}{% if block.type == 'editorial_visual' %}
+        <option value="{{ loop.index0 }}">{{ block.title }} ({{ block.kind }})</option>
+      {% endif %}{% endfor %}</select>
+    </label>
+    <label>Visual type<select name="kind" id="visual-kind">
+      <option value="annotated_example">Annotated before-and-after example</option>
+      <option value="comparison">Editorial comparison table</option>
+      <option value="checklist">Checklist</option><option value="flow">Process diagram / timeline</option>
+      <option value="image">Image or illustration from an HTTPS URL</option>
+      <option value="bar_chart">Evidence-backed bar chart</option><option value="line_chart">Evidence-backed line graph</option>
+    </select></label>
+    <label>Title<input name="title" maxlength="350" required></label>
+    <label>Caption / reader takeaway<textarea name="caption" maxlength="350" required></textarea></label>
+    <label>Insert before block<select name="index" id="visual-position">
+      {% for block in visual_blocks %}<option value="{{ loop.index0 }}">{{ loop.index }}. {{ block.type }}: {{ (block.title or block.brief or block.heading or '')[:85] }}</option>{% endfor %}
+      <option value="{{ visual_blocks|length }}">End of article</option>
+    </select></label>
+    <fieldset data-visual-kinds="annotated_example"><legend>Hypothetical example</legend>
+      <label>Before<textarea name="before" maxlength="350"></textarea></label>
+      <label>After<textarea name="after" maxlength="350"></textarea></label>
+      <label>Annotations, one per line (up to six)<textarea name="notes" rows="4"></textarea></label>
+    </fieldset>
+    <fieldset data-visual-kinds="comparison" hidden><legend>Qualitative editorial comparison, no statistics</legend>
+      <label>Column headings, separated by |<input name="columns" placeholder="Technique | What to describe | What to avoid"></label>
+      <label>Rows, one per line; separate cells with |<textarea name="rows" rows="5"></textarea></label>
+    </fieldset>
+    <fieldset data-visual-kinds="flow checklist" hidden><legend>Steps or checklist items</legend>
+      <label>One item per line<textarea name="items" rows="6"></textarea></label>
+    </fieldset>
+    <fieldset data-visual-kinds="image" hidden><legend>Image accessibility and rights</legend>
+      <p>Use an image you own or are licensed to use. This links an existing image; it does not upload, license or generate one.</p>
+      <label>HTTPS image URL<input name="url" type="url"></label>
+      <label>Descriptive alt text<input name="alt" maxlength="350"></label>
+      <label>Creator / rights credit<input name="credit" maxlength="350"></label>
+      <label>Attribution link, optional<input name="credit_url" type="url"></label>
+    </fieldset>
+    <fieldset data-visual-kinds="bar_chart line_chart" hidden><legend>Verified data only</legend>
+      <label>Units<input name="units" maxlength="80" placeholder="seconds, people, percent"></label>
+      <label>One point per line: label | value | fact ID<textarea name="points" rows="5"></textarea></label>
+      <p>Values must appear in their referenced evidence. Check units, comparable populations and interpretation yourself. Matching a number does not prove a valid comparison.</p>
+      {% if visual_facts %}<ul>{% for fact in visual_facts %}<li><code>{{ fact.id }}</code>: {{ fact.claim }} <a href="{{ fact.source_url }}" rel="noopener noreferrer" target="_blank">Source</a></li>{% endfor %}</ul>
+      {% else %}<p>No verified facts are available for this draft. Charts are blocked.</p>{% endif %}
+    </fieldset>
+    <div class="gap-2"><button class="btn" type="submit">Preview visual</button>
+      <button class="btn" id="visual-remove" type="button" hidden>Preview removal</button>
+      <button class="btn btn-green" id="visual-save" type="button" disabled>Save reviewed visual to draft</button></div>
+    <p id="visual-status" role="status" aria-live="polite"></p>
+  </form>
+  <div id="visual-preview" style="max-width:900px;overflow-wrap:anywhere"></div>
+  {% if visual_history %}<details><summary>Tracked visual revisions</summary><ul>
+    {% for change in visual_history %}<li><a href="/tasks/{{ change.id }}">Revision task #{{ change.id }}</a> · {{ change.created_at }}
+      {% if change.after_revision == visual_revision %}<button class="btn btn-sm" type="button" data-visual-undo="{{ change.id }}">Undo this change</button>{% endif %}</li>{% endfor %}
+  </ul></details>{% endif %}
+</details>
+<script type="application/json" id="visual-config">{{ {'id':ci.id,'revision':visual_revision,'blocks':visual_blocks}|tojson }}</script>
+<script src="/static/content-visuals.js" defer></script>
