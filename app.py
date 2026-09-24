@@ -1643,13 +1643,43 @@ def _render_content_body(ci, item_id, conn, cur):
     return banner + f"<h1>{ci['title']}</h1>{html}"
 
 
+PUBLICATION_COLUMNS = """
+ (SELECT c.intake_params->'publication' FROM clients c WHERE c.brand_id=ci.brand_id
+  ORDER BY c.id DESC LIMIT 1) AS publication_config,
+ EXISTS(SELECT 1 FROM services svc JOIN brands pb ON pb.project_id=svc.project_id
+        WHERE pb.id=ci.brand_id AND svc.container LIKE '%-ghost-%') AS ghost_service
+"""
+
+
+def publication_context(item):
+    """Describe configured capability, never mistake CMS presence for an adapter."""
+    config = _parse_jsonb(item.get('publication_config'))
+    config = config if isinstance(config, dict) else {}
+    driver = str(config.get('type') or '').lower()
+    name = 'Ghost' if item.get('ghost_service') or driver == 'ghost' else driver.title() or 'Not configured'
+    ready = driver == 'wordpress' and all(isinstance(config.get(k), str) and config[k].strip()
+                                         for k in ('base_url', 'username', 'credential_ref'))
+    ready = bool(ready and config['base_url'].startswith('https://'))
+    message = 'Publishing is not connected for this project. Configure its publishing integration once, not for each article.'
+    if name == 'Ghost':
+        ready = False
+        message = 'This project uses Ghost. Dashboard-to-Ghost publishing is not connected yet. No WordPress details are needed. You can export the draft for manual review in the blog editor.'
+    elif ready:
+        message = 'Uses the project’s saved publishing connection. Confirm only when this draft is ready to go public.'
+    if ready and any(isinstance(b, dict) and b.get('type') == 'editorial_visual' for b in item.get('content_blocks') or []):
+        ready = False
+        message = 'The current publishing adapter cannot preserve this draft’s visuals. Export HTML for review; dashboard publication is blocked to avoid losing them.'
+    return {'name': name, 'ready': ready, 'message': message,
+            'url': config.get('base_url', '') if ready else ''}
+
+
 @app.route("/content/<int:item_id>/preview")
 def content_preview(item_id):
     conn = models.db()
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT ci.*, b.name AS brand_name "
+            "SELECT ci.*, b.name AS brand_name, " + PUBLICATION_COLUMNS +
             "FROM content_items ci LEFT JOIN brands b ON b.id=ci.brand_id "
             "WHERE ci.id=%s", (item_id,))
         ci = cur.fetchone()
@@ -1682,7 +1712,7 @@ def content_preview(item_id):
                                updated_fmt=updated_fmt, visual_revision=content_revision(ci),
                                visual_blocks=blocks if isinstance(blocks, list) else [],
                                visual_facts=s.get('facts', []) if isinstance(s, dict) else [],
-                               visual_history=visual_history)
+                               visual_history=visual_history, publication=publication_context(ci))
     finally:
         conn.close()
 
@@ -1766,7 +1796,8 @@ def content_approve(ci_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id,status,publish_task_id,content_blocks,structured FROM content_items WHERE id=%s FOR UPDATE", (ci_id,))
+        cur.execute("SELECT ci.id,ci.status,ci.publish_task_id,ci.content_blocks,ci.structured," +
+                    PUBLICATION_COLUMNS + " FROM content_items ci WHERE ci.id=%s FOR UPDATE OF ci", (ci_id,))
         item = cur.fetchone()
         if not item:
             return jsonify({"ok": False, "error": "not found"}), 404
@@ -1786,6 +1817,10 @@ def content_approve(ci_id):
             "username": (payload.get("username") or "").strip(),
             "credential_ref": (payload.get("credential_ref") or "").strip(),
         }
+        destination = {key: value for key, value in destination.items() if value}
+        context = publication_context(item)
+        if item.get('ghost_service') or (not destination and not context['ready']):
+            return jsonify(ok=False, error=context['message']), 409
         if item.get("publish_task_id"):
             cur.execute("SELECT id,type,status,params FROM tasks WHERE id=%s FOR UPDATE",
                         (item["publish_task_id"],))

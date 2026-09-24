@@ -154,6 +154,34 @@ class WorkflowRouteTests(unittest.TestCase):
         inserts = [sql for sql, _ in conn.cursor_value.calls if sql.startswith("INSERT INTO tasks")]
         self.assertEqual(inserts, [])
 
+    def test_ghost_approval_is_blocked_without_creating_task(self):
+        conn = FakeConnection([{'id': 23, 'status': 'draft', 'ghost_service': True}])
+        with mock.patch.object(dashboard.models, 'db', return_value=conn):
+            response = self.client.post('/content/23/approve', json={})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('Ghost', response.get_json()['error'])
+        self.assertEqual(conn.commits, 0)
+        self.assertFalse(any(sql.startswith('INSERT') for sql, _ in conn.cursor_value.calls))
+
+    def test_saved_publication_connection_is_not_overwritten_by_empty_fields(self):
+        config = {'type': 'wordpress', 'base_url': 'https://example.com',
+                  'username': 'publisher', 'credential_ref': 'WP_APP_PASSWORD'}
+        conn = FakeConnection([{'id': 8, 'status': 'draft', 'publication_config': config}, {'id': 45}])
+        with mock.patch.object(dashboard.models, 'db', return_value=conn), mock.patch.object(dashboard.models, 'ch_trace'):
+            response = self.client.post('/content/8/approve', json={})
+        self.assertEqual(response.status_code, 200)
+        inserts = [(sql, params) for sql, params in conn.cursor_value.calls if sql.startswith('INSERT')]
+        self.assertEqual(json.loads(inserts[0][1][0])['destination'], {})
+
+    def test_publication_readiness_is_honest(self):
+        self.assertFalse(dashboard.publication_context({})['ready'])
+        self.assertFalse(dashboard.publication_context({'publication_config': {'type': 'ghost'}})['ready'])
+        config = {'type': 'wordpress', 'base_url': 'https://example.com',
+                  'username': 'publisher', 'credential_ref': 'WP_APP_PASSWORD'}
+        self.assertTrue(dashboard.publication_context({'publication_config': config})['ready'])
+        self.assertFalse(dashboard.publication_context({'publication_config': config,
+                         'content_blocks': [{'type': 'editorial_visual'}]})['ready'])
+
     def test_alert_fragment_renders_when_snapshot_is_unavailable(self):
         with mock.patch.object(dashboard.models, "get_combined_alert_state", return_value={
             "stale": True,

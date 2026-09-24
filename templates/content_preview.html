@@ -17,7 +17,7 @@
     <button class="btn btn-sm" onclick="sourceImages({{ ci.id }})">Source images</button>
     {% endif %}
     {% if ci.status in ('draft', 'needs_publish_input') %}
-    <button class="btn btn-sm btn-green" onclick="openPublish({{ ci.id }})">Approve &amp; Publish</button>
+    <button class="btn btn-sm {{ 'btn-green' if publication.ready else '' }}" onclick="openPublish({{ ci.id }})">{{ 'Approve & Publish' if publication.ready else 'Publishing status' }}</button>
     {% endif %}
     {% if ci.status == 'draft' %}
     <a class="btn btn-sm" href="#visual-editor">Add or revise visuals</a>
@@ -37,20 +37,16 @@
   {{ body_html|safe }}
 </div>
 
-<dialog id="publishDialog" class="workflow-dialog">
+<dialog id="publishDialog" class="workflow-dialog" aria-labelledby="publishHeading">
   <form method="dialog" id="publishForm">
-    <h3>Approve content for publication</h3>
-    <p class="subtle">This creates a tracked publication task. Never paste a secret value; reference the variable name in the engagement-owned <code>.env</code>.</p>
-    <label>Destination adapter
-      <select name="destination_type"><option value="">Use engagement configuration</option><option value="wordpress">WordPress</option></select>
-    </label>
-    <label>Base URL <input name="base_url" placeholder="https://example.com"></label>
-    <label>Username <input name="username" autocomplete="off"></label>
-    <label>Credential reference <input name="credential_ref" placeholder="WORDPRESS_APPLICATION_PASSWORD" autocomplete="off"></label>
-    <label>Publication notes <textarea name="instructions" rows="3" placeholder="Optional slug, category, timing, or client instruction"></textarea></label>
+    <h3 id="publishHeading">{{ 'Publish this article?' if publication.ready else 'Publishing connection needed' }}</h3>
+    <p><strong>{{ ci.brand_name or 'This project' }}</strong> · {{ publication.name }}</p>
+    {% if publication.url %}<p>{{ publication.url }}</p>{% endif %}
+    <p>{{ publication.message }}</p>
     <div class="gap-2 mt-2">
-      <button class="btn" value="cancel">Cancel</button>
-      <button class="btn btn-green" type="button" onclick="approveContent()">Create publication task</button>
+      <button class="btn" value="cancel">{{ 'Cancel' if publication.ready else 'Close' }}</button>
+      {% if publication.ready %}<button class="btn btn-green" id="publishConfirm" type="button" onclick="approveContent()">Approve &amp; publish</button>
+      {% else %}<a class="btn" href="/content/{{ ci.id }}/download-html">Export HTML</a>{% endif %}
     </div>
     <div id="publishError" class="subtle mt-1" style="color:var(--red)"></div>
   </form>
@@ -63,12 +59,19 @@ function openPublish(id) {
   document.getElementById('publishDialog').showModal();
 }
 async function approveContent() {
+  var button = document.getElementById('publishConfirm');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
   var form = document.getElementById('publishForm');
   var payload = Object.fromEntries(new FormData(form).entries());
   var r = await fetch('/content/'+publishContentId+'/approve', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   var d = await r.json();
   if (d.ok) { window.location.href='/tasks/'+d.task_id; return; }
   document.getElementById('publishError').textContent=d.error||'Unable to create publication task';
+  } catch (error) {
+    document.getElementById('publishError').textContent='Unable to reach the dashboard. Check the publication task status before retrying.';
+  } finally { button.disabled = false; }
 }
 async function regenerateContent(id) {
   if (!confirm('Regenerate this content? The current draft will be cleared.')) return;
