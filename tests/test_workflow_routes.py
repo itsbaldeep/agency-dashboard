@@ -139,7 +139,10 @@ class WorkflowRouteTests(unittest.TestCase):
 
     def test_content_approval_resumes_existing_input_task_without_duplicate(self):
         conn = FakeConnection([
-            {"id": 8, "status": "needs_publish_input", "publish_task_id": 44},
+            {"id": 8, "status": "needs_publish_input", "publish_task_id": 44,
+             "title": "Example", "body": "A complete article.",
+             "content_blocks": [{"type": "prose", "markdown": "A complete article."}],
+             "structured": {}},
             {"id": 44, "type": "publish_content", "status": "needs_input",
              "params": {"content_item_id": 8, "destination": {}}},
         ])
@@ -155,7 +158,10 @@ class WorkflowRouteTests(unittest.TestCase):
         self.assertEqual(inserts, [])
 
     def test_ghost_approval_is_blocked_without_creating_task(self):
-        conn = FakeConnection([{'id': 23, 'status': 'draft', 'ghost_service': True}])
+        conn = FakeConnection([{'id': 23, 'status': 'draft', 'ghost_service': True,
+                                'title': 'Example', 'body': 'A complete article.',
+                                'content_blocks': [{'type': 'prose', 'markdown': 'A complete article.'}],
+                                'structured': {}}])
         with mock.patch.object(dashboard.models, 'db', return_value=conn):
             response = self.client.post('/content/23/approve', json={})
         self.assertEqual(response.status_code, 409)
@@ -166,7 +172,10 @@ class WorkflowRouteTests(unittest.TestCase):
     def test_saved_publication_connection_is_not_overwritten_by_empty_fields(self):
         config = {'type': 'wordpress', 'base_url': 'https://example.com',
                   'username': 'publisher', 'credential_ref': 'WP_APP_PASSWORD'}
-        conn = FakeConnection([{'id': 8, 'status': 'draft', 'publication_config': config}, {'id': 45}])
+        conn = FakeConnection([{'id': 8, 'status': 'draft', 'publication_config': config,
+                                'title': 'Example', 'body': 'A complete article.',
+                                'content_blocks': [{'type': 'prose', 'markdown': 'A complete article.'}],
+                                'structured': {}}, {'id': 45}])
         with mock.patch.object(dashboard.models, 'db', return_value=conn), mock.patch.object(dashboard.models, 'ch_trace'):
             response = self.client.post('/content/8/approve', json={})
         self.assertEqual(response.status_code, 200)
@@ -186,7 +195,8 @@ class WorkflowRouteTests(unittest.TestCase):
         import publication_settings
         from ghost_publisher import content_digest
         item = {'id': 23, 'status': 'draft', 'ghost_service': True, 'publication_project_id': 30,
-                'title': 'Reviewed title', 'body': 'Reviewed body', 'content_blocks': [], 'structured': {}}
+                'title': 'Reviewed title', 'body': 'Reviewed body',
+                'content_blocks': [{'type': 'prose', 'markdown': 'Reviewed body'}], 'structured': {}}
         config = {'type': 'ghost', 'enabled': True, 'base_url': 'https://example.com/blog/'}
         with mock.patch.object(publication_settings, 'project_destination', return_value=config):
             conn = FakeConnection([item])

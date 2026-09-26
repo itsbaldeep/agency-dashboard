@@ -206,6 +206,10 @@
   {% set seo_counts = seo_summary.get('counts') or seo_data.get('counts') or {} %}
   {% set comparison = seo_summary.get('comparison') or seo_data.get('comparison') or {} %}
   {% set crawl_bound = crawl.get('bounded') or {} %}
+  {% set link_audit = crawl.get('link_audit') or {} %}
+  {% set link_coverage = link_audit.get('coverage') or {} %}
+  {% set external_links = link_audit.get('external_links') or [] %}
+  {% set internal_link_errors = link_audit.get('internal_links') or [] %}
   {% set page_metrics = pagespeed.get('core_web_vitals') or {} %}
   {% set gsc_query = gsc.get('query') or {} %}
   {% set ga4_traffic = (ga4.get('traffic') or {}).get('totals') or {} %}
@@ -217,6 +221,8 @@
     {% endfor %}
     <span class="pill"><span class="pill-label">Pages</span>{{ seo_counts.get('pages', crawl.get('pages')|length if crawl.get('pages') is sequence and crawl.get('pages') is not string else 0) }}</span>
     <span class="pill"><span class="pill-label">Broken</span>{{ seo_counts.get('broken_links', crawl.get('broken_links')|length if crawl.get('broken_links') is sequence and crawl.get('broken_links') is not string else 0) }}</span>
+    <span class="pill"><span class="pill-label">External broken</span>{{ external_links|selectattr('state', 'equalto', 'broken')|list|length }}</span>
+    <span class="pill"><span class="pill-label">External blocked</span>{{ external_links|selectattr('state', 'equalto', 'blocked')|list|length }}</span>
     <span class="pill"><span class="pill-label">Findings</span>{{ seo_counts.get('findings', seo_data.get('findings')|length if seo_data.get('findings') is sequence and seo_data.get('findings') is not string else 0) }}</span>
   </div>
   <div class="metrics-grid mt-2">
@@ -232,6 +238,21 @@
     <div class="table-wrap mt-1"><table><thead><tr><th>URL</th><th>Status</th><th>Title</th><th>H1s</th><th>Canonical</th><th>Schema</th><th>Sitemap</th></tr></thead><tbody>
     {% for page in crawl.get('pages', [])[:50] %}{% set fields = page.get('fields') or {} %}<tr><td class="detail-cell">{{ page.get('url', '—') }}</td><td>{{ page.get('status', '—') }}</td><td class="detail-cell">{{ fields.get('title', '—') }}</td><td>{{ fields.get('h1_count', '—') }}</td><td class="detail-cell">{{ fields.get('canonical', '—') }}</td><td>{{ fields.get('jsonld_valid_count', 0) }}/{{ fields.get('jsonld_count', 0) }} valid</td><td>{{ fields.get('sitemap_member', false) }}</td></tr>{% endfor %}
     </tbody></table></div>
+  </details>
+  {% endif %}
+  {% if link_audit %}
+  <details class="mt-2"><summary class="subtle" style="cursor:pointer">Content link audit</summary>
+    <div class="metrics-grid mt-1">
+      <div class="metric"><span class="metric-label">Inventory</span><span>{{ link_coverage.get('pages_fetched', 0) }} fetched{% if link_coverage.get('pages_unfetched', 0) %} · {{ link_coverage.get('pages_unfetched') }} not fetched at cap{% endif %}</span></div>
+      <div class="metric"><span class="metric-label">External coverage</span><span>{{ link_coverage.get('external_checked', 0) }}/{{ link_coverage.get('external_unique_discovered', 0) }} checked{% if link_coverage.get('external_budget_exhausted') %} · budget exhausted{% endif %}</span></div>
+      <div class="metric"><span class="metric-label">Internal broken</span><span>{{ internal_link_errors|length }}</span></div>
+      <div class="metric"><span class="metric-label">Audit status</span><span>{{ link_audit.get('status', 'unavailable') }}</span></div>
+    </div>
+    {% if external_links %}
+    <div class="table-wrap mt-1"><table><thead><tr><th>External target</th><th>Status</th><th>Source page</th><th>Evidence</th></tr></thead><tbody>
+      {% for link in external_links[:50] %}<tr><td class="detail-cell">{{ link.get('url', '—') }}</td><td>{{ link.get('state', 'unknown') }}{% if link.get('status') %} ({{ link.get('status') }}){% endif %}</td><td class="detail-cell">{{ link.get('source_url', '—') }}</td><td>{{ link.get('reason', link.get('error', 'checked')) }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% endif %}
   </details>
   {% endif %}
   {% if seo_data.get('findings') %}

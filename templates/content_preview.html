@@ -15,12 +15,13 @@
     <a href="/content/{{ ci.id }}/download-html" class="btn btn-sm">Export HTML</a>
     {% endif %}
     {% if has_image_slots and ci.status in ('draft', 'outline') %}
-    <button class="btn btn-sm" onclick="sourceImages({{ ci.id }})">Source images</button>
+    <a class="btn btn-sm" href="#asset-studio" onclick="document.getElementById('asset-studio').open=true">Review images</a>
     {% endif %}
     {% if ci.status in ('draft', 'needs_publish_input') %}
     <button class="btn btn-sm {{ 'btn-green' if publication.ready else '' }}" onclick="openPublish({{ ci.id }})">{{ 'Approve & Publish' if publication.ready else 'Publishing status' }}</button>
     {% endif %}
     {% if ci.status == 'draft' %}
+    <button class="btn btn-sm" onclick="checkContentLinks({{ ci.id }})">Check links</button>
     <a class="btn btn-sm" href="#visual-editor">Add or revise visuals</a>
     <button class="btn btn-sm" onclick="regenerateContent({{ ci.id }})">Regenerate</button>
     {% endif %}
@@ -34,6 +35,20 @@
 </div>
 
 {% if ci.status == 'draft' %}{% include 'content_visual_editor.html' %}{% endif %}
+{% if ci.status == 'draft' %}{% include 'content_assets.html' %}{% endif %}
+{% if quality.findings %}
+<section class="asset-studio" role="status" aria-label="Content readiness">
+  <h3>Needs review before publication</h3>
+  <ul>{% for finding in quality.findings %}<li>{{ ('Block ' ~ (finding.block_index + 1) ~ ': ') if finding.block_index is not none else '' }}{{ finding.message }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+{% set link_report = (ci.structured or {}).get('link_report', {}) %}
+{% if link_report %}
+<details class="asset-studio"><summary>Link verification: {{ link_report.links|length }} checked</summary>
+<p>Checked {{ link_report.checked_at }}. Publication rechecks links; edits can make this report stale.</p>
+<ul>{% for link in link_report.links %}<li>{{ link.state }}: <a href="{{ link.url }}" target="_blank" rel="noopener noreferrer">{{ link.url }}</a>{% if link.status %} (HTTP {{ link.status }}){% endif %}</li>{% endfor %}</ul>
+</details>
+{% endif %}
 <div class="content-preview-body">
   {{ body_html|safe }}
 </div>
@@ -46,7 +61,7 @@
     <p>{{ publication.message }}</p>
     <div class="gap-2 mt-2">
       <button class="btn" value="cancel">{{ 'Cancel' if publication.ready else 'Close' }}</button>
-      {% if publication.ready %}<button class="btn btn-green" id="publishConfirm" type="button" onclick="approveContent()">Approve &amp; publish</button>
+      {% if publication.ready %}<button class="btn btn-green" id="publishConfirm" type="button" onclick="approveContent()" {{ 'disabled' if quality.blocking else '' }}>Approve &amp; publish</button>
       {% else %}<a class="btn" href="/content/{{ ci.id }}/download-html">Export HTML</a>{% endif %}
     </div>
     <div id="publishError" class="subtle mt-1" style="color:var(--red)"></div>
@@ -55,6 +70,12 @@
 
 <script>
 var publishContentId = null;
+async function checkContentLinks(id) {
+  const response = await fetch('/content/'+id+'/check-links', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:{{ visual_revision|tojson }}})});
+  const data = await response.json();
+  if (data.ok) location.href = '/tasks/' + data.task_id;
+  else alert(data.error || 'Unable to check links');
+}
 function openPublish(id) {
   publishContentId = id;
   document.getElementById('publishDialog').showModal();
@@ -76,9 +97,11 @@ async function approveContent() {
   } finally { button.disabled = false; }
 }
 async function regenerateContent(id) {
-  if (!confirm('Regenerate this content? The current draft will be cleared.')) return;
-  await fetch('/content/'+id+'/regenerate', {method:'POST'});
-  location.reload();
+  if (!confirm('Regenerate from the saved outline? The current draft will be saved in a recovery task. This does not publish.')) return;
+  const response = await fetch('/content/'+id+'/regenerate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:{{ visual_revision|tojson }}})});
+  const data = await response.json();
+  if (data.ok) location.href = '/tasks/' + data.task_id;
+  else alert(data.error || 'Unable to regenerate');
 }
 async function sourceImages(id) {
   var r = await fetch('/content/'+id+'/images', {method:'POST'});
@@ -87,4 +110,5 @@ async function sourceImages(id) {
   alert(d.error || 'Unable to source images');
 }
 </script>
+<script src="/static/external-links.js" defer></script>
 {% endblock %}

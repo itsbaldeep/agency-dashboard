@@ -26,6 +26,12 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       BIND_HOST: "0.0.0.0"
       BIND_PORT: "8000"
+      AGENCY_S3_ENDPOINT: agency-minio:9000
+      AGENCY_S3_BUCKET: agency-editorial
+      AGENCY_S3_PUBLIC_BASE: https://assets.apps.deployden.tech
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+    env_file:
+      - /home/agency/.config/agency/assets.env
 
 networks:
   net-control:

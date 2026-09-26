@@ -1,0 +1,34 @@
+<details class="asset-studio" id="asset-studio">
+  <summary>Images and asset library</summary>
+  <p>Search licensed stock or upload an illustration. Review the preview, description and rights before attaching. Publication copies reviewed media to the application's own storage.</p>
+  <div class="asset-controls">
+    <form id="asset-search"><label>Find stock images<input name="q" minlength="3" maxlength="120" placeholder="e.g. writing a resume" required></label><button class="btn">Search Pexels</button></form>
+    <button class="btn" id="asset-library">Your project's library</button>
+  </div>
+  <form id="asset-upload" class="asset-fields">
+    <label>Image (PNG, JPEG or WebP)<input name="file" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+    <label>Describe what the image shows<input name="description" maxlength="300" required></label>
+    <label>Creator<input name="creator" maxlength="200" required></label>
+    <label>Rights<select name="rights"><option value="owned">We own this image</option><option value="licensed">Licensed for this use</option><option value="generated">Generated illustration</option></select></label>
+    <label>Source or license URL<input name="source_url" type="url" placeholder="https://..."></label>
+    <button class="btn" type="submit">Upload to Agency library</button>
+  </form>
+  <p id="asset-status" role="status" aria-live="polite"></p>
+  <div id="asset-results" class="asset-grid"></div>
+  <form id="asset-review" class="asset-fields" hidden>
+    <h3>Review selected image</h3>
+    <img id="asset-preview" alt="Selected image preview">
+    <p id="asset-provenance"></p>
+    <label>Alt text<input name="alt" minlength="10" maxlength="300" required></label>
+    <label>Caption (optional)<input name="caption" maxlength="500"></label>
+    <label>Position<select name="index">{% for block in visual_blocks %}<option value="{{ loop.index0 }}">{{ loop.index }}. {{ 'Replace planned image' if block.type == 'image_slot' else 'Insert before ' ~ block.type }}: {{ (block.heading or block.brief or block.alt or '')[:70] }}</option>{% endfor %}<option value="{{ visual_blocks|length }}">End of article</option></select></label>
+    <label><input type="checkbox" name="reviewed" required> I checked that the image, alt text and rights are accurate.</label>
+    <button class="btn btn-green">Attach reviewed image</button>
+  </form>
+</details>
+<style>
+.external-link-dialog{box-sizing:border-box;width:min(92vw,480px);max-height:85vh;overflow:auto;border:1px solid #cbd7d1;border-radius:14px;padding:24px;color:#18382c;background:#fff}.external-link-dialog::backdrop{background:#10251988}.external-link-dialog h2{font-size:1.25rem}.external-link-dialog button,.external-link-dialog>a{display:inline-block;padding:10px 14px;margin:6px;border:1px solid #cbd7d1;border-radius:8px;color:#18382c;background:#f3f7f4}.external-link-label{font-size:.8em}
+.asset-studio{margin:16px 0;padding:16px;border:1px solid var(--border);border-radius:12px;max-width:100%;box-sizing:border-box}.asset-studio summary{cursor:pointer;font-weight:650}.asset-studio p{max-width:75ch}.asset-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:16px 0}.asset-fields label,.asset-controls label{display:grid;gap:6px}.asset-fields input,.asset-fields select,.asset-controls input{width:100%;max-width:100%;box-sizing:border-box;min-width:0;padding:9px}.asset-fields input[type=checkbox]{width:auto}.asset-fields[hidden]{display:none}.asset-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:end}.asset-controls form{display:flex;gap:8px;flex-wrap:wrap}.asset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.asset-card{padding:12px;border:1px solid var(--border);border-radius:8px;overflow-wrap:anywhere}.asset-card img{width:100%;height:145px;object-fit:contain}.asset-card p{font-size:14px}.asset-fields img{max-width:100%;max-height:320px;object-fit:contain}.asset-fields h3,.asset-fields>p{grid-column:1/-1}@media(max-width:600px){.asset-studio{padding:12px}.asset-fields{grid-template-columns:minmax(0,1fr)}.asset-grid{grid-template-columns:minmax(0,1fr)}}
+</style>
+<script id="asset-context" type="application/json">{{ {'id':ci.id,'revision':visual_revision}|tojson }}</script>
+<script src="/static/content-assets.js" defer></script>

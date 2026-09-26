@@ -19,10 +19,12 @@ import psycopg2.extras
 import models
 from content_calendar import content_calendar
 from content_visuals import content_visuals, revision as content_revision, visual_module
+from content_asset_routes import assets
 
 app = Flask(__name__)
 app.register_blueprint(content_calendar)
 app.register_blueprint(content_visuals)
+app.register_blueprint(assets)
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]
@@ -1703,6 +1705,8 @@ def content_preview(item_id):
         if isinstance(s, dict):
             target_keyword = s.get("target_keyword", "") or ""
         blocks = _parse_jsonb(ci.get("content_blocks"))
+        from content_quality import validate_content
+        quality = validate_content(blocks, 'publish') if ci.get('status') != 'outline' else {'findings': [], 'blocking': False}
         has_image_slots = isinstance(blocks, list) and any(
             isinstance(block, dict) and block.get("type") == "image_slot" for block in blocks
         )
@@ -1726,42 +1730,16 @@ def content_preview(item_id):
                                updated_fmt=updated_fmt, visual_revision=content_revision(ci),
                                visual_blocks=blocks if isinstance(blocks, list) else [],
                                visual_facts=s.get('facts', []) if isinstance(s, dict) else [],
-                               visual_history=visual_history, publication=publication_context(ci), published_url=published_url)
+                               visual_history=visual_history, publication=publication_context(ci), published_url=published_url,
+                               quality=quality)
     finally:
         conn.close()
 
 
 @app.route("/content/<int:item_id>/images", methods=["POST"])
 def content_images(item_id):
-    """Generate + store slot images for a content item's image_slots (MinIO)."""
-    conn = models.db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT content_blocks FROM content_items WHERE id=%s", (item_id,))
-        row = cur.fetchone()
-        if not row:
-            return jsonify({"ok": False, "error": "not found"}), 404
-        blocks = row.get("content_blocks")
-        if isinstance(blocks, str):
-            try:
-                blocks = json.loads(blocks)
-            except json.JSONDecodeError:
-                blocks = None
-        if not isinstance(blocks, list):
-            return jsonify({"ok": False, "error": "no content_blocks"}), 400
-        sys.path.insert(0, "/home/agency/agency-os/scripts")
-        import importlib
-        cp = importlib.import_module("content_pipeline")
-        blocks = cp.source_slot_images(item_id, blocks)
-        blocks = cp.ensure_slot_images(item_id, blocks)
-        cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
-                    (json.dumps(blocks), item_id))
-        conn.commit()
-        made = [b for b in blocks if b.get("type") == "image_slot" and b.get("url")]
-        return jsonify({"ok": True, "slots": len(made),
-                        "urls": [b["url"] for b in made]})
-    finally:
-        conn.close()
+    """Keep the legacy endpoint explicit instead of silently making placeholders."""
+    return jsonify(ok=False, error='Automatic placeholder sourcing is retired. Use the asset library to search, upload and review a real image.'), 409
 
 
 @app.route("/content/<int:ci_id>/download-html")
@@ -1817,6 +1795,11 @@ def content_approve(ci_id):
             return jsonify({"ok": False, "error": "not found"}), 404
         if item["status"] not in ("draft", "approved", "needs_publish_input", "publish_failed"):
             return jsonify({"ok": False, "error": f"content is {item['status']}, not publishable"}), 409
+        from content_quality import publication_blockers
+        blocks_for_check = item.get('content_blocks') or ([{'type': 'prose', 'markdown': item['body']}] if item.get('body') else [])
+        blockers = publication_blockers(blocks_for_check)
+        if blockers:
+            return jsonify(ok=False, error='Resolve the content checks before publishing', findings=blockers), 409
         for block in item.get('content_blocks') or []:
             if isinstance(block, dict) and block.get('type') == 'editorial_visual':
                 try:
@@ -1893,12 +1876,34 @@ def content_approve(ci_id):
 
 @app.route("/content/<int:ci_id>/regenerate", methods=["POST"])
 def content_regenerate(ci_id):
+    payload = request.get_json(silent=True) or {}
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE content_items SET status='draft', body=NULL WHERE id=%s", (ci_id,))
+        from content_visuals import get_item
+        item = get_item(cur, ci_id)
+        if payload.get('revision') != content_revision(item):
+            return jsonify(ok=False, error='Reload and review this draft before regenerating it'), 409
+        structured = dict(item.get('structured') or {})
+        if not structured.get('blocks') or not structured.get('target_keyword'):
+            return jsonify(ok=False, error='A saved outline and target keyword are required'), 409
+        before = {key: item.get(key) for key in ('body', 'content_blocks', 'structured')}
+        cur.execute("INSERT INTO tasks(type,status,params,triggered_by,result_ref,started_at,finished_at) "
+                    "VALUES ('content_regeneration_snapshot','done',%s,'dashboard-regenerate',%s,now(),now()) RETURNING id",
+                    (json.dumps({'content_item_id': ci_id}), json.dumps({'before': before, 'publication': False})))
+        snapshot = cur.fetchone()['id']
+        for key in ('visual_base_body', 'visual_review', 'quality_report', 'link_report'):
+            structured.pop(key, None)
+        cur.execute("INSERT INTO tasks(type,status,params,triggered_by) VALUES ('content_compose','queued',%s,'dashboard-regenerate') RETURNING id",
+                    (json.dumps({'content_item_id': ci_id, 'target_keyword': structured['target_keyword'], 'snapshot_task_id': snapshot}),))
+        task_id = cur.fetchone()['id']
+        cur.execute("UPDATE content_items SET status='outline',body=NULL,content_blocks='[]'::jsonb,structured=%s,task_id=%s,updated_at=now() WHERE id=%s",
+                    (json.dumps(structured), task_id, ci_id))
         conn.commit()
-        return jsonify({"ok": True})
+        return jsonify(ok=True, task_id=task_id, snapshot_task_id=snapshot)
+    except (ValueError, PermissionError, LookupError) as exc:
+        conn.rollback()
+        return jsonify(ok=False, error=str(exc)), 409
     finally:
         conn.close()
 
