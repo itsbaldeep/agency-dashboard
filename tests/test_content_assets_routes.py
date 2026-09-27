@@ -111,6 +111,73 @@ class ContentAssetRouteTests(unittest.TestCase):
         self.assertEqual(good.status_code, 200)
         asset_module.return_value.search_assets.assert_called_once_with("resume diagram")
 
+    def test_suggestion_get_is_read_only(self):
+        item = draft()
+        conn = FakeConnection([item, None])
+        with mock.patch.object(routes.models, 'db', return_value=conn):
+            response = self.client.get('/content/22/assets/suggestions')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['slots'], [])
+        self.assertEqual(conn.commits, 0)
+        self.assertTrue(all(sql.lstrip().startswith('SELECT') for sql, _ in conn.calls))
+
+    def test_suggestion_refresh_is_revision_bound(self):
+        conn = FakeConnection([draft(), None])
+        with mock.patch.object(routes.models, 'db', return_value=conn):
+            response = self.client.post('/content/22/assets/suggestions', json={'revision': 'stale'})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(conn.commits, 0)
+
+    def test_suggestion_refresh_deduplicates_running_task(self):
+        item = draft()
+        conn = FakeConnection([item, {'id': 405, 'status': 'running'}])
+        with mock.patch.object(routes.models, 'db', return_value=conn):
+            response = self.client.post('/content/22/assets/suggestions', json={'revision': content_visuals.revision(item)})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['task_id'], 405)
+        self.assertTrue(all('INSERT' not in sql for sql, _ in conn.calls))
+
+    def test_suggestion_refresh_records_expected_fingerprint(self):
+        from content_asset_workflow import fingerprint
+        item = draft()
+        conn = FakeConnection([item, None, {'id': 406, 'status': 'queued'}])
+        with mock.patch.object(routes.models, 'db', return_value=conn):
+            response = self.client.post('/content/22/assets/suggestions', json={'revision': content_visuals.revision(item)})
+        self.assertEqual(response.status_code, 200)
+        inserts = [(sql, params) for sql, params in conn.calls if 'INSERT' in sql]
+        self.assertEqual(len(inserts), 1)
+        self.assertEqual(json.loads(inserts[0][1][0])['expected_fingerprint'], fingerprint(item))
+
+    def test_stale_suggestions_are_not_presented_as_current(self):
+        item = draft()
+        item['structured']['asset_suggestions'] = {'fingerprint': 'old', 'slots': [{'index': 0}]}
+        conn = FakeConnection([item, {'id': 406, 'status': 'done'}])
+        with mock.patch.object(routes.models, 'db', return_value=conn):
+            response = self.client.get('/content/22/assets/suggestions')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['stale'])
+        self.assertEqual(response.get_json()['slots'], [])
+
+    def test_replace_image_keeps_body_and_blocks_in_sync(self):
+        item = draft()
+        old = {'type': 'image_slot', 'alt': 'Old descriptive alt text',
+               'url': 'https://assets.example/old.png', 'caption': 'Old caption.'}
+        item['content_blocks'].append(old)
+        item['body'] += '\n\n![Old descriptive alt text](https://assets.example/old.png)\n\nOld caption.'
+        metadata = {'url': 'https://assets.example/new.png', 'sha256': 'a' * 64,
+                    'provenance': {'kind': 'owned'}}
+        conn = FakeConnection([item, {'id': 8, 'metadata': metadata}, {'id': 410}])
+        with mock.patch.object(routes.models, 'db', return_value=conn):
+            response = self.client.post('/content/22/assets/attach', json={
+                'revision': content_visuals.revision(item), 'asset_id': 8, 'index': 1,
+                'alt': 'New descriptive alt text', 'caption': 'New caption.', 'reviewed': True})
+        self.assertEqual(response.status_code, 200)
+        updated = next(params for sql, params in conn.calls if sql.startswith('UPDATE content_items'))
+        self.assertIn('![New descriptive alt text](https://assets.example/new.png)', updated[1])
+        self.assertNotIn('Old caption', updated[1])
+        self.assertIn('New caption.', updated[1])
+        self.assertEqual(updated[1].count('!['), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

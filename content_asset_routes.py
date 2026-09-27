@@ -9,6 +9,40 @@ from content_visuals import get_item, revision, error
 assets = Blueprint('content_assets', __name__)
 
 
+@assets.route('/content/<int:item_id>/assets/suggestions', methods=['GET', 'POST'])
+def suggestions(item_id):
+    """Reads never fetch or import assets. Explicit refresh creates bounded work."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        item = get_item(cur, item_id)
+        from content_asset_workflow import fingerprint
+        cur.execute("SELECT id,status FROM tasks WHERE type='content_asset_suggestions' "
+                    "AND params->>'content_item_id'=%s ORDER BY id DESC LIMIT 1", (str(item_id),))
+        task = cur.fetchone()
+        if request.method == 'POST':
+            if (request.get_json(silent=True) or {}).get('revision') != revision(item):
+                raise PermissionError('Draft changed. Reload before refreshing image suggestions.')
+            if not task or task['status'] not in ('queued', 'running'):
+                cur.execute("INSERT INTO tasks(type,status,params,triggered_by) "
+                            "VALUES ('content_asset_suggestions','queued',%s,'dashboard-image-suggestions') RETURNING id,status",
+                            (json.dumps({'content_item_id': item_id, 'expected_fingerprint': fingerprint(item)}),))
+                task = cur.fetchone()
+            conn.commit()
+            return jsonify(ok=True, task_id=task['id'], task_status=task['status'])
+        report = (item.get('structured') or {}).get('asset_suggestions') or {}
+        stale = bool(report) and report.get('fingerprint') != fingerprint(item)
+        return jsonify(ok=True, slots=[] if stale else report.get('slots', []), stale=stale,
+                       checked_at=report.get('checked_at'), revision=revision(item),
+                       task_id=task['id'] if task else None, task_status=task['status'] if task else None)
+    except (ValueError, PermissionError, LookupError) as exc:
+        conn.rollback()
+        return error(exc)
+    finally:
+        conn.rollback()
+        conn.close()
+
+
 @assets.post('/content/<int:item_id>/check-links')
 def check_links(item_id):
     conn = models.db()
@@ -159,27 +193,24 @@ def attach(item_id):
         blocks = list(item['content_blocks'])
         if type(index) is not int or not 0 <= index <= len(blocks):
             raise ValueError('Choose a valid image position')
-        metadata = {**asset['metadata'], 'id': asset['id'], 'alt': alt, 'reviewed': True}
+        metadata = {**asset['metadata'], 'id': asset['id'], 'alt': alt, 'reviewed': True,
+                    'selection_source': 'dashboard_review'}
         block = {'type': 'image_slot', 'alt': alt, 'prompt': alt, 'url': metadata['url'], 'asset': metadata,
-                 'reviewed': True, 'caption': str(payload.get('caption', '')).strip()[:500]}
+                 'reviewed': True, 'selection_source': 'dashboard_review',
+                 'caption': str(payload.get('caption', '')).strip()[:500]}
         before = {key: item.get(key) for key in ('content_blocks', 'body', 'structured')}
-        previous_alt = None
+        previous_block = None
         if index < len(blocks) and blocks[index].get('type') == 'image_slot':
-            previous_alt = blocks[index].get('alt', '')
+            previous_block = blocks[index]
             block = {**blocks[index], **block}
             blocks[index] = block
         else:
             blocks.insert(index, block)
-        body = item.get('body') or ''
-        markdown_image = f"![{alt}]({metadata['url']})"
-        if block.get('caption'):
-            markdown_image += '\n\n' + block['caption']
-        marker = f'_[Image planned: {previous_alt}]_'
-        body = body.replace(marker, markdown_image) if previous_alt and marker in body else body + '\n\n' + markdown_image
+        from content_asset_workflow import replace_image_body
+        body = replace_image_body(item.get('body') or '', previous_block, block)
         structured = dict(item.get('structured') or {})
         if 'visual_base_body' in structured:
-            base = structured['visual_base_body']
-            structured['visual_base_body'] = base.replace(marker, markdown_image) if marker in base else base + '\n\n' + markdown_image
+            structured['visual_base_body'] = replace_image_body(structured['visual_base_body'], previous_block, block)
         from content_quality import validate_content
         structured['quality_report'] = validate_content(blocks, 'draft')
         structured.pop('link_report', None)
