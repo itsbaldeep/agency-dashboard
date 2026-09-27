@@ -109,6 +109,8 @@ def upload(item_id):
             action = 'stock_import'
         else:
             uploaded = request.files.get('file')
+            if payload.get('public_asset') not in (True, 'on', 'true'):
+                raise ValueError('Confirm this image is safe for public storage. Do not upload private resumes or personal data.')
             if not uploaded or not description:
                 raise ValueError('Choose an image and describe what it shows')
             rights = str(payload.get('rights', '')).strip()
@@ -127,6 +129,9 @@ def upload(item_id):
     except (ValueError, TypeError, PermissionError, LookupError) as exc:
         conn.rollback()
         return error(exc)
+    except Exception:
+        conn.rollback()
+        return jsonify(ok=False, error='The asset provider or storage could not complete this request. No image was attached; retry after checking service health.'), 503
     finally:
         conn.close()
 
@@ -158,12 +163,28 @@ def attach(item_id):
         block = {'type': 'image_slot', 'alt': alt, 'prompt': alt, 'url': metadata['url'], 'asset': metadata,
                  'reviewed': True, 'caption': str(payload.get('caption', '')).strip()[:500]}
         before = {key: item.get(key) for key in ('content_blocks', 'body', 'structured')}
+        previous_alt = None
         if index < len(blocks) and blocks[index].get('type') == 'image_slot':
+            previous_alt = blocks[index].get('alt', '')
             block = {**blocks[index], **block}
             blocks[index] = block
         else:
             blocks.insert(index, block)
-        cur.execute('UPDATE content_items SET content_blocks=%s,updated_at=now() WHERE id=%s', (json.dumps(blocks), item_id))
+        body = item.get('body') or ''
+        markdown_image = f"![{alt}]({metadata['url']})"
+        if block.get('caption'):
+            markdown_image += '\n\n' + block['caption']
+        marker = f'_[Image planned: {previous_alt}]_'
+        body = body.replace(marker, markdown_image) if previous_alt and marker in body else body + '\n\n' + markdown_image
+        structured = dict(item.get('structured') or {})
+        if 'visual_base_body' in structured:
+            base = structured['visual_base_body']
+            structured['visual_base_body'] = base.replace(marker, markdown_image) if marker in base else base + '\n\n' + markdown_image
+        from content_quality import validate_content
+        structured['quality_report'] = validate_content(blocks, 'draft')
+        structured.pop('link_report', None)
+        cur.execute('UPDATE content_items SET content_blocks=%s,body=%s,structured=%s,updated_at=now() WHERE id=%s',
+                    (json.dumps(blocks), body, json.dumps(structured), item_id))
         cur.execute("INSERT INTO tasks(type,status,params,triggered_by,result_ref,started_at,finished_at) "
                     "VALUES ('content_asset_attach','done',%s,'dashboard-asset-review',%s,now(),now()) RETURNING id",
                     (json.dumps({'content_item_id': item_id, 'asset_id': asset['id']}),

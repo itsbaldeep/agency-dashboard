@@ -11,6 +11,7 @@
     <label>Creator<input name="creator" maxlength="200" required></label>
     <label>Rights<select name="rights"><option value="owned">We own this image</option><option value="licensed">Licensed for this use</option><option value="generated">Generated illustration</option></select></label>
     <label>Source or license URL<input name="source_url" type="url" placeholder="https://..."></label>
+    <label><input type="checkbox" name="public_asset" required> This image is safe for public storage. It contains no private resume or personal information.</label>
     <button class="btn" type="submit">Upload to Agency library</button>
   </form>
   <p id="asset-status" role="status" aria-live="polite"></p>
