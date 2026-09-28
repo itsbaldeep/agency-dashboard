@@ -19,12 +19,12 @@ const assert = require('node:assert/strict');
    await page.locator('.block-citations a').first().click();
    assert.ok(await page.locator('.external-link-dialog').evaluate(e=>e.open));
    await page.getByRole('button',{name:'Stay here'}).click();
-   await page.locator('#asset-studio summary').click();
+   await page.locator('#asset-studio > summary').click();
    await page.locator('#asset-library').click();
    await page.locator('.asset-card').first().waitFor();
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth+1));
    if (engine===chromium && width===390) {
-    await page.locator('#asset-studio summary').click();
+    await page.locator('#asset-studio > summary').click();
     await page.locator('.pipeline-article figure').scrollIntoViewIfNeeded();
     await page.screenshot({path:'/tmp/draft22-mobile-image.png'});
    }
