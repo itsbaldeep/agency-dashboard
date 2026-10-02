@@ -147,6 +147,73 @@
 </div>
 
 <div class="report-section">
+  {% if growth_report is defined %}{% include "fragments/growth_report.html" %}{% endif %}
+  <a class="btn btn-sm" href="/content/calendar?brand_id={{ brand.id }}">Plan content from this evidence</a>
+</div>
+
+{% if activation_report is defined %}
+<div class="report-section">
+<div class="card" id="acquisition-activation-report">
+  <div class="card-header"><span class="card-title">Acquisition &amp; activation</span><span class="badge badge-dim">aggregate, consented</span></div>
+  {% if activation_report.status == 'unavailable' %}
+    <p class="empty">{{ activation_report.reason }}</p>
+  {% else %}
+    <p class="subtle">{{ activation_report.window.start or '-' }} to {{ activation_report.window.end or '-' }}{% if activation_report.captured_at %} · captured {{ activation_report.captured_at }}{% endif %}. Counts are aggregate and may be incomplete where consent or attribution is unavailable.</p>
+    <div class="table-wrap"><table><thead><tr><th>Signups</th><th>Resume processed</th><th>Profile confirmed</th><th>Job selected</th><th>Kit completed</th><th>Evidence-only kits</th><th>Downloads served</th></tr></thead><tbody><tr>{% for key in ['signups','resume_processed','profile_confirmed','job_selected','kit_completed','kit_evidence_only','download_served'] %}<td>{{ activation_report.totals.get(key) if activation_report.totals.get(key) is not none else 'unavailable' }}</td>{% endfor %}</tr></tbody></table></div>
+    {% if activation_report.signup_cohort_totals and activation_report.signup_cohort_totals.signups is not none %}<p class="subtle mt-2">Closed signup cohort progress, measured from users who signed up in this window:</p><div class="table-wrap"><table><thead><tr><th>Signup cohort</th><th>Resume processed</th><th>Profile confirmed</th><th>Kit started</th><th>Kit completed</th><th>Evidence-only</th><th>Downloads served</th></tr></thead><tbody><tr>{% for key in ['signups','resume_processed','profile_confirmed','kit_started','kit_completed','kit_evidence_only','download_served'] %}<td>{{ activation_report.signup_cohort_totals.get(key) if activation_report.signup_cohort_totals.get(key) is not none else 'unavailable' }}</td>{% endfor %}</tr></tbody></table></div>{% endif %}
+    <p class="subtle mt-2">Consented signups: {{ activation_report.coverage.consented_signups if activation_report.coverage.consented_signups is not none else 'unavailable' }} · unattributed signups: {{ activation_report.coverage.unattributed_signups if activation_report.coverage.unattributed_signups is not none else 'unavailable' }} · event health: {{ activation_report.health.status }}</p>
+    {% if activation_report.cohorts %}<details class="mt-2"><summary>Attributed cohorts</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th>Landing path</th><th>Signups</th><th>Resume</th><th>Confirmed</th><th>Started</th><th>Completed</th><th>Evidence-only</th><th>Downloads</th></tr></thead><tbody>{% for row in activation_report.cohorts %}<tr><td>{{ row.source }}</td><td>{{ row.medium }}</td><td>{{ row.campaign }}</td><td class="detail-cell">{{ row.landing_path }}</td><td>{{ row.signups }}</td><td>{{ row.resume_processed if row.resume_processed is not none else '—' }}</td><td>{{ row.profile_confirmed if row.profile_confirmed is not none else '—' }}</td><td>{{ row.kit_started if row.kit_started is not none else '—' }}</td><td>{{ row.kit_completed if row.kit_completed is not none else '—' }}</td><td>{{ row.kit_evidence_only if row.kit_evidence_only is not none else '—' }}</td><td>{{ row.download_served if row.download_served is not none else '—' }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+  {% endif %}
+  <p class="subtle mt-2"><a href="/api/brands/{{ brand.id }}/acquisition-activation">View aggregate report JSON</a>. Attribution depends on consent, browser support and configured campaign parameters.</p>
+</div>
+</div>
+{% endif %}
+
+<div class="report-section">
+<div class="card" id="seo-cleanup">
+  <div class="card-header"><span class="card-title">SEO cleanup review</span><span class="subtle">{% if seo_cleanup_batch %}batch #{{ seo_cleanup_batch.id }} · {{ seo_cleanup_batch.status }} · plan {{ seo_cleanup_batch.plan_hash[:12] }}{% else %}latest measured run{% endif %} · {{ seo_cleanup_groups|length }} grouped actions</span></div>
+  {% if seo_cleanup_batch and seo_cleanup_batch.summary %}<p class="subtle">{{ seo_cleanup_batch.summary.get('verified', 0) }} verified · {{ seo_cleanup_batch.summary.get('stale', 0) }} stale · {{ seo_cleanup_batch.summary.get('needs_review', 0) or seo_cleanup_batch.summary.get('needsreview', 0) }} needs review{% if seo_cleanup_batch.summary.get('live_write') is sameas false %} · proposal only{% endif %}</p>{% endif %}
+  {% if seo_cleanup_batch and seo_cleanup_batch.status in ['verified','failed'] %}<button class="btn btn-xs" type="button" onclick="retrySeoCleanupNotification({{ seo_cleanup_batch.id }})">Retry Discord summary</button><span id="seo-cleanup-notify-status" class="subtle ml-2" role="status"></span>{% endif %}
+  {% if seo_cleanup_groups %}
+  <p class="subtle">Review the exact findings below before queueing a tracked cleanup. The worker must verify the same run after execution.</p>
+  <div class="table-wrap"><table><thead><tr><th>Rule</th><th>URLs</th><th>Evidence</th><th>Before / proposed after</th></tr></thead><tbody>{% for group in seo_cleanup_groups %}<tr><td>{{ group.rule }}</td><td class="detail-cell">{% for item in group.items or [] %}{{ item.url }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td><td class="mono">{% for item in group.items or [] %}{{ item.evidence_id }}{% if not loop.last %}, {% endif %}{% endfor %}</td><td>{% for item in group.items or [] %}{{ item.precondition.observed or '—' }} / {{ item.expected or item.destination or 'review required' }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>{% endfor %}</tbody></table></div>
+  {% if seo_cleanup_batch and seo_cleanup_batch.status in ['proposed','failed'] %}<button class="btn btn-sm btn-primary" type="button" id="seo-cleanup-approve">Approve prepared cleanup batch</button>{% endif %}<span id="seo-cleanup-status" class="subtle ml-2" role="status"></span>
+  {% else %}<p class="empty">No measured SEO findings are available for cleanup.</p>{% endif %}
+</div>
+</div>
+
+{% if seo_cleanup_groups or seo_cleanup_batch %}<script>
+(function () {
+  var button = document.getElementById('seo-cleanup-approve');
+  if (button) button.addEventListener('click', async function () {
+    var status = document.getElementById('seo-cleanup-status');
+    button.disabled = true;
+    status.textContent = 'Preparing exact cleanup batch…';
+    try {
+      var preview = await fetch('/api/brands/{{ brand.id }}/seo-cleanup/preview');
+      var data = await preview.json();
+      if (!preview.ok || !data.ok || !data.batch_id || !data.plan_hash) throw new Error(data.error || 'No prepared cleanup plan is available');
+      var response = await fetch('/api/brands/{{ brand.id }}/seo-cleanup/approve', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({batch_id: data.batch_id, plan_hash: data.plan_hash})});
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Cleanup could not be queued');
+      status.innerHTML = 'Batch #' + result.batch_id + ' approved. <a href="/tasks/' + result.task_id + '">Task #' + result.task_id + '</a> is queued; verification receipt is pending.';
+    } catch (error) { status.textContent = error.message || 'Cleanup could not be queued'; button.disabled = false; }
+  });
+  window.retrySeoCleanupNotification = async function (batchId) {
+    var status = document.getElementById('seo-cleanup-notify-status');
+    if (!status) return;
+    status.textContent = 'Queueing summary…';
+    try {
+      var response = await fetch('/api/brands/{{ brand.id }}/seo-cleanup/' + batchId + '/notify', {method: 'POST'});
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Unable to queue summary');
+      status.textContent = 'Notification task #' + result.task_id + ' ' + (result.deduplicated ? 'already queued.' : 'queued.');
+    } catch (error) { status.textContent = error.message || 'Unable to queue summary'; }
+  };
+}());
+</script>{% endif %}
+
+<div class="report-section">
 <div class="card" id="measurement-setup">
   <div class="card-header">
     <span class="card-title">SEO Measurement</span>
@@ -201,6 +268,10 @@
   {% set seo_counts = seo_summary.get('counts') or seo_data.get('counts') or {} %}
   {% set comparison = seo_summary.get('comparison') or seo_data.get('comparison') or {} %}
   {% set crawl_bound = crawl.get('bounded') or {} %}
+  {% set link_audit = crawl.get('link_audit') or {} %}
+  {% set link_coverage = link_audit.get('coverage') or {} %}
+  {% set external_links = link_audit.get('external_links') or [] %}
+  {% set internal_link_errors = link_audit.get('internal_links') or [] %}
   {% set page_metrics = pagespeed.get('core_web_vitals') or {} %}
   {% set gsc_query = gsc.get('query') or {} %}
   {% set ga4_traffic = (ga4.get('traffic') or {}).get('totals') or {} %}
@@ -212,14 +283,16 @@
     {% endfor %}
     <span class="pill"><span class="pill-label">Pages</span>{{ seo_counts.get('pages', crawl.get('pages')|length if crawl.get('pages') is sequence and crawl.get('pages') is not string else 0) }}</span>
     <span class="pill"><span class="pill-label">Broken</span>{{ seo_counts.get('broken_links', crawl.get('broken_links')|length if crawl.get('broken_links') is sequence and crawl.get('broken_links') is not string else 0) }}</span>
+    <span class="pill"><span class="pill-label">External broken</span>{{ external_links|selectattr('state', 'equalto', 'broken')|list|length }}</span>
+    <span class="pill"><span class="pill-label">External blocked</span>{{ external_links|selectattr('state', 'equalto', 'blocked')|list|length }}</span>
     <span class="pill"><span class="pill-label">Findings</span>{{ seo_counts.get('findings', seo_data.get('findings')|length if seo_data.get('findings') is sequence and seo_data.get('findings') is not string else 0) }}</span>
   </div>
   <div class="metrics-grid mt-2">
     <div class="metric"><span class="metric-label">Crawl bound</span><span>{{ crawl_bound.get('max_pages', '—') }} pages max{% if crawl_bound.get('page_cap_reached') %} · cap reached, {{ crawl_bound.get('queued_count', 0) }} queued{% endif %}</span></div>
     <div class="metric"><span class="metric-label">Mobile PageSpeed</span><span>{% if pagespeed.get('performance_score') is not none %}{{ (pagespeed.get('performance_score')|float * 100)|round|int }}%{% else %}unavailable{% endif %}</span></div>
     <div class="metric"><span class="metric-label">LCP / CLS / TBT</span><span>{{ page_metrics.get('largest-contentful-paint', '—') }} / {{ page_metrics.get('cumulative-layout-shift', '—') }} / {{ page_metrics.get('total-blocking-time', '—') }}</span></div>
-    <div class="metric"><span class="metric-label">GSC</span><span>{% if gsc_status in ['available', 'partial', 'ok'] %}{{ gsc_query.get('clicks', 0) }} clicks · {{ gsc_query.get('impressions', 0) }} impressions · {{ (gsc_query.get('ctr', 0)|float * 100)|round(2) }}% CTR · {{ gsc_query.get('weighted_average_position', '—') }} position{% else %}unavailable{% endif %}</span></div>
-    <div class="metric"><span class="metric-label">GA4</span><span>{% if ga4_status in ['available', 'partial', 'ok'] %}{{ ga4_traffic.get('sessions', 0) }} sessions · {{ ga4_traffic.get('totalUsers', 0) }} users · {{ ga4_traffic.get('keyEvents', 0) }} key events · {{ ga4_leads.get('eventCount', 0) }} generate_lead{% else %}unavailable{% endif %}</span></div>
+    <div class="metric"><span class="metric-label">GSC query sample</span><span>{% if gsc_query.get('status') == 'available' %}{{ gsc_query.get('clicks', 0) }} clicks · {{ gsc_query.get('impressions', 0) }} impressions in returned query rows, not property totals{% else %}unavailable{% endif %}</span></div>
+    <div class="metric"><span class="metric-label">GA4 landing-page sample</span><span>{% if (ga4.get('traffic') or {}).get('status') == 'available' %}{{ ga4_traffic.get('sessions', 0) }} sessions · {{ ga4_traffic.get('keyEvents', 0) }} key events in returned landing-page rows. Unique users are shown only in Growth measurement.{% else %}unavailable{% endif %}</span></div>
     <div class="metric"><span class="metric-label">Finding comparison</span><span>+{{ comparison.get('finding_ids_added', [])|length }} added · {{ comparison.get('finding_ids_resolved', [])|length }} resolved</span></div>
   </div>
   {% if crawl.get('pages') %}
@@ -227,6 +300,21 @@
     <div class="table-wrap mt-1"><table><thead><tr><th>URL</th><th>Status</th><th>Title</th><th>H1s</th><th>Canonical</th><th>Schema</th><th>Sitemap</th></tr></thead><tbody>
     {% for page in crawl.get('pages', [])[:50] %}{% set fields = page.get('fields') or {} %}<tr><td class="detail-cell">{{ page.get('url', '—') }}</td><td>{{ page.get('status', '—') }}</td><td class="detail-cell">{{ fields.get('title', '—') }}</td><td>{{ fields.get('h1_count', '—') }}</td><td class="detail-cell">{{ fields.get('canonical', '—') }}</td><td>{{ fields.get('jsonld_valid_count', 0) }}/{{ fields.get('jsonld_count', 0) }} valid</td><td>{{ fields.get('sitemap_member', false) }}</td></tr>{% endfor %}
     </tbody></table></div>
+  </details>
+  {% endif %}
+  {% if link_audit %}
+  <details class="mt-2"><summary class="subtle" style="cursor:pointer">Content link audit</summary>
+    <div class="metrics-grid mt-1">
+      <div class="metric"><span class="metric-label">Inventory</span><span>{{ link_coverage.get('pages_fetched', 0) }} fetched{% if link_coverage.get('pages_unfetched', 0) %} · {{ link_coverage.get('pages_unfetched') }} not fetched at cap{% endif %}</span></div>
+      <div class="metric"><span class="metric-label">External coverage</span><span>{{ link_coverage.get('external_checked', 0) }}/{{ link_coverage.get('external_unique_discovered', 0) }} checked{% if link_coverage.get('external_budget_exhausted') %} · budget exhausted{% endif %}</span></div>
+      <div class="metric"><span class="metric-label">Internal broken</span><span>{{ internal_link_errors|length }}</span></div>
+      <div class="metric"><span class="metric-label">Audit status</span><span>{{ link_audit.get('status', 'unavailable') }}</span></div>
+    </div>
+    {% if external_links %}
+    <div class="table-wrap mt-1"><table><thead><tr><th>External target</th><th>Status</th><th>Source page</th><th>Evidence</th></tr></thead><tbody>
+      {% for link in external_links[:50] %}<tr><td class="detail-cell">{{ link.get('url', '—') }}</td><td>{{ link.get('state', 'unknown') }}{% if link.get('status') %} ({{ link.get('status') }}){% endif %}</td><td class="detail-cell">{{ link.get('source_url', '—') }}</td><td>{{ link.get('reason', link.get('error', 'checked')) }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% endif %}
   </details>
   {% endif %}
   {% if seo_data.get('findings') %}

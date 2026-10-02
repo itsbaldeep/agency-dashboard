@@ -15,10 +15,19 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, send_file, make_response, send_from_directory
 import markdown
 import psycopg2.extras
+from psycopg2 import errors
 
 import models
+from script_paths import ensure_agency_scripts
+ensure_agency_scripts()
+from content_calendar import content_calendar
+from content_visuals import content_visuals, revision as content_revision, visual_module
+from content_asset_routes import assets
 
 app = Flask(__name__)
+app.register_blueprint(content_calendar)
+app.register_blueprint(content_visuals)
+app.register_blueprint(assets)
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]
@@ -168,6 +177,229 @@ def _parse_jsonb(v):
         except (json.JSONDecodeError, TypeError):
             return {}
     return v or {}
+
+
+def _growth_number(value):
+    """Return a finite non-negative number, or None for unavailable data."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0 or number != number or number in (float("inf"), float("-inf")):
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _growth_window(raw, fallback_name):
+    """Normalize one window from the versioned growth collector contract."""
+    raw = raw if isinstance(raw, dict) else {}
+    start = raw.get("start_date")
+    end = raw.get("end_date")
+    valid = False
+    try:
+        start_date = datetime.fromisoformat(str(start)).date()
+        end_date = datetime.fromisoformat(str(end)).date()
+        valid = (end_date - start_date).days == 27
+    except (TypeError, ValueError):
+        pass
+    return {
+        "name": fallback_name,
+        "start": start,
+        "end": end,
+        "valid": valid,
+    }
+
+
+def _growth_source_window(source, period):
+    source = source if isinstance(source, dict) else {}
+    windows = source.get("windows") if isinstance(source.get("windows"), dict) else {}
+    item = windows.get(period) if isinstance(windows.get(period), dict) else {}
+    metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) and item.get("status") == "available" else {}
+    def metric(key):
+        return _growth_number(metrics.get(key))
+    return {
+        "status": item.get("status") or "source_unavailable",
+        "impressions": metric("impressions"),
+        "clicks": metric("clicks"),
+        "users": metric("totalUsers"),
+        "sessions": metric("sessions"),
+        "keyEvents": metric("keyEvents"),
+    }
+
+
+def _normalise_growth_report(seo_data):
+    """Validate the deterministic growth contract before Jinja renders it.
+
+    Growth is deliberately an adapter at the presentation boundary. Missing,
+    malformed, or old SEO records become an explicit unavailable state, never
+    fabricated zeroes. It accepts the canonical ``raw_data['growth']`` shape
+    only; unsupported schemas require a fresh measurement.
+    """
+    unavailable = {
+        "status": "unavailable",
+        "reason": "Run SEO measurement to collect comparable growth data",
+        "current": {**_growth_window({}, "Current 28 days"), "gsc": {}, "ga4": {}},
+        "prior": {**_growth_window({}, "Prior 28 days"), "gsc": {}, "ga4": {}},
+        "comparison": {"status": "unavailable", "reason": "No comparable measurement windows"},
+        "followups": [],
+        "freshness": {"captured_at": None},
+    }
+    if not isinstance(seo_data, dict) or not isinstance(seo_data.get("growth"), dict):
+        return unavailable
+    growth = seo_data["growth"]
+    if growth.get("schema_version") != 1:
+        return unavailable
+    windows = growth.get("windows") if isinstance(growth.get("windows"), dict) else {}
+    sources = growth.get("sources") if isinstance(growth.get("sources"), dict) else {}
+    current = {**_growth_window(windows.get("current"), "Current 28 days"),
+               "gsc": _growth_source_window(sources.get("gsc"), "current"),
+               "ga4": _growth_source_window(sources.get("ga4"), "current")}
+    prior = {**_growth_window(windows.get("previous"), "Previous 28 days"),
+             "gsc": _growth_source_window(sources.get("gsc"), "previous"),
+             "ga4": _growth_source_window(sources.get("ga4"), "previous")}
+    if not current["valid"] or not prior["valid"]:
+        unavailable["reason"] = "Run SEO measurement to collect valid 28-day comparison windows"
+        return unavailable
+    try:
+        current_start = datetime.fromisoformat(str(current["start"])).date()
+        prior_end = datetime.fromisoformat(str(prior["end"])).date()
+    except (TypeError, ValueError):
+        return unavailable
+    if (current_start - prior_end).days != 1:
+        unavailable["reason"] = "Run SEO measurement to collect non-overlapping comparison windows"
+        return unavailable
+    comparison = {}
+    for source_name in ("gsc", "ga4"):
+        comparison[source_name] = {}
+        keys = ("impressions", "clicks") if source_name == "gsc" else ("users", "sessions", "keyEvents")
+        for key in keys:
+            now, before = current[source_name][key], prior[source_name][key]
+            if now is None or before is None:
+                continue
+            change = now - before
+            comparison[source_name][key] = {
+                "trend": ("emerging" if now else "inconclusive") if before == 0 else "up" if change > 0 else "down" if change < 0 else "flat",
+                "percent": round(change / before * 100, 2) if before else None,
+            }
+    source_states = []
+    for name in ("gsc", "ga4"):
+        source = sources.get(name) if isinstance(sources.get(name), dict) else {}
+        state = source.get("state", "source_unavailable")
+        if current[name]["status"] != "available":
+            state = "source_unavailable"
+        elif prior[name]["status"] != "available":
+            state = "historical_unavailable"
+        source_states.append(state)
+    available_states = [state for state in source_states if state in {"available", "insufficient_evidence"}]
+    if not available_states:
+        comparison_status = "unavailable"
+    elif len(available_states) != len(source_states):
+        comparison_status = "partial"
+    else:
+        comparison_status = growth.get("confidence") if growth.get("confidence") in {"available", "insufficient_evidence"} else "insufficient_evidence"
+    reason = "Insufficient evidence to call a reliable trend." if comparison_status == "insufficient_evidence" else None
+    if "historical_unavailable" in source_states:
+        reason = "Current observations are available, but historical coverage is incomplete. No trend can be established for those sources; this does not itself indicate an access failure."
+    comparison = {
+        "status": comparison_status,
+        "reason": reason,
+        "deltas": comparison,
+    }
+    followups = growth.get("recommendations") or []
+    if not isinstance(followups, list):
+        followups = []
+    captured_at = growth.get("captured_at") or seo_data.get("captured_at")
+    return {
+        "status": growth.get("status") if growth.get("status") != "source_unavailable" else "unavailable",
+        "reason": growth.get("reason"),
+        "current": current,
+        "prior": prior,
+        "comparison": comparison,
+        "followups": [item for item in followups if isinstance(item, (str, dict))][:10],
+        "freshness": {
+            "captured_at": captured_at,
+            "gsc_timezone": sources["gsc"].get("date_timezone") if isinstance(sources.get("gsc"), dict) else None,
+            "ga4_timezone": sources["ga4"].get("date_timezone") if isinstance(sources.get("ga4"), dict) else None,
+        },
+    }
+
+
+def _normalise_activation_report(seo_data):
+    """Adapt the aggregate activation snapshot into a safe report contract.
+
+    The collector intentionally stores counts only.  Missing or malformed
+    snapshots remain unavailable so the dashboard cannot turn an access or
+    consent gap into a zero conversion claim.
+    """
+    unavailable = {
+        "status": "unavailable",
+        "reason": "Activation measurement is not available in the latest SEO snapshot",
+        "captured_at": None,
+        "window": {},
+        "totals": {},
+        "cohorts": [],
+        "coverage": {},
+        "signup_cohort_totals": {},
+        "health": {},
+    }
+    raw = seo_data.get("activation") if isinstance(seo_data, dict) else None
+    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+        return unavailable
+    status = raw.get("status")
+    if status not in {"available", "partial", "unavailable"}:
+        return unavailable
+    window = raw.get("window") if isinstance(raw.get("window"), dict) else {}
+    totals = raw.get("totals") if isinstance(raw.get("totals"), dict) else {}
+    coverage = raw.get("coverage") if isinstance(raw.get("coverage"), dict) else {}
+    health = raw.get("health") if isinstance(raw.get("health"), dict) else {}
+    allowed = ("signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served")
+    clean_totals = {key: _growth_number(totals.get(key)) for key in allowed}
+    if any(value is None for value in clean_totals.values()) and status == "available":
+        return unavailable
+    clean_coverage = {key: _growth_number(coverage.get(key)) for key in ("consented_signups", "unattributed_signups")}
+    cohort_totals_raw = raw.get("signup_cohort_totals") if isinstance(raw.get("signup_cohort_totals"), dict) else {}
+    cohort_keys = ("signups", "resume_processed", "profile_confirmed", "kit_started", "download_served", "kit_completed", "kit_evidence_only")
+    cohort_totals = {key: _growth_number(cohort_totals_raw.get(key)) for key in cohort_keys}
+    cohorts = []
+    for cohort in raw.get("cohorts") if isinstance(raw.get("cohorts"), list) else []:
+        if not isinstance(cohort, dict):
+            continue
+        item = {key: cohort.get(key) or "" for key in ("source", "medium", "campaign", "landing_path")}
+        for key in ("signups", "resume_processed", "profile_confirmed", "kit_started", "download_served", "kit_completed", "kit_evidence_only"):
+            item[key] = _growth_number(cohort.get(key))
+        item["consented_signups"] = _growth_number(cohort.get("consented_signups"))
+        if item["signups"] is not None:
+            cohorts.append(item)
+    return {
+        "status": status,
+        "reason": raw.get("reason"),
+        "captured_at": raw.get("captured_at") or seo_data.get("captured_at"),
+        "window": {"days": _growth_number(window.get("days")), "start": window.get("start"), "end": window.get("end")},
+        "totals": clean_totals,
+        "cohorts": cohorts[:50],
+        "coverage": clean_coverage,
+        "signup_cohort_totals": cohort_totals,
+        "health": {"last_event_at": health.get("last_event_at"), "status": health.get("status") or "unknown"},
+    }
+
+
+def _seo_cleanup_groups(findings):
+    """Group equivalent deterministic SEO findings for a reviewable batch."""
+    groups = {}
+    for finding in findings if isinstance(findings, list) else []:
+        if not isinstance(finding, dict):
+            continue
+        evidence_id = finding.get("evidence_id") or finding.get("id")
+        rule = str(finding.get("rule") or "unknown")
+        url = str(finding.get("url") or "")
+        key = (rule, url)
+        item = groups.setdefault(key, {"key": "%s|%s" % key, "rule": rule, "url": url, "finding_ids": [], "observed": finding.get("observed"), "expected": finding.get("expected"), "items": []})
+        if evidence_id is not None and evidence_id not in item["finding_ids"]:
+            item["finding_ids"].append(evidence_id)
+        item["items"].append({"evidence_id": evidence_id, "url": url, "expected": finding.get("expected"), "destination": finding.get("expected"), "precondition": {"observed": finding.get("observed")}})
+    return sorted(groups.values(), key=lambda item: (item["rule"], item["url"]))
 
 
 def _load_latest_marketing_assessment(cur, brand_id):
@@ -358,6 +590,15 @@ def brand_report(brand_id):
         audit_history = cur.fetchall()
 
         marketing_assessment, marketing_assessment_stages = _load_latest_marketing_assessment(cur, brand_id)
+        prepared_cleanup = None
+        try:
+            cur.execute("SELECT id, audit_id, plan_hash, revision, status, plan, summary, created_at, updated_at FROM seo_cleanup_batches WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1", (brand_id,))
+            prepared_cleanup = cur.fetchone()
+            if prepared_cleanup:
+                prepared_cleanup = dict(prepared_cleanup)
+                prepared_cleanup["summary"] = _parse_jsonb(prepared_cleanup.get("summary"))
+        except Exception:
+            prepared_cleanup = None
     finally:
         conn.close()
 
@@ -375,6 +616,13 @@ def brand_report(brand_id):
         seo_summary = {}
     if not isinstance(seo_data, dict):
         seo_data = {}
+    growth_report = _normalise_growth_report(seo_data)
+    activation_report = _normalise_activation_report(seo_data)
+    if prepared_cleanup:
+        prepared_plan = _parse_jsonb(prepared_cleanup.get("plan"))
+        seo_cleanup_groups = prepared_plan.get("groups") if isinstance(prepared_plan, dict) else []
+    else:
+        seo_cleanup_groups = _seo_cleanup_groups(seo_data.get("findings"))
 
     capabilities = []
     if project_id:
@@ -509,6 +757,8 @@ def brand_report(brand_id):
                            domain=domain, competitors=competitors, audit=audit,
                            audit_summary=audit_summary, audit_sources=audit_sources,
                            seo_audit=seo_audit, seo_summary=seo_summary, seo_data=seo_data,
+                           growth_report=growth_report, activation_report=activation_report,
+                           seo_cleanup_groups=seo_cleanup_groups, seo_cleanup_batch=prepared_cleanup,
                            audit_history=audit_history, audit_date_fmt=audit_date_fmt,
                            suggestions=suggestions, visibility_rows=visibility_rows,
                            ch_error=ch_error, capabilities=capabilities,
@@ -524,6 +774,119 @@ def brand_report(brand_id):
                            marketing_assessment=marketing_assessment,
                            marketing_assessment_stages=marketing_assessment_stages,
                            summary_json=json.dumps(audit_summary, indent=2, default=str) if audit_summary else "")
+
+
+@app.route("/api/brands/<int:brand_id>/acquisition-activation")
+def acquisition_activation_report(brand_id):
+    """Return the latest stored aggregate activation snapshot, read-only."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, created_at, raw_data FROM audits WHERE brand_id=%s AND audit_type='seo_measurement' ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        audit = cur.fetchone()
+    finally:
+        conn.close()
+    if not audit:
+        return jsonify({"ok": True, "brand_id": brand_id, "report": _normalise_activation_report({})})
+    raw = _parse_jsonb(audit.get("raw_data"))
+    report = _normalise_activation_report(raw)
+    report["audit_id"] = audit.get("id")
+    report["audit_created_at"] = audit.get("created_at")
+    return jsonify({"ok": True, "brand_id": brand_id, "report": report})
+
+
+@app.route("/api/brands/<int:brand_id>/seo-cleanup/preview")
+def seo_cleanup_preview(brand_id):
+    """Return the worker-prepared cleanup batch, including before/after metadata."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, audit_id, plan_hash, revision, status, plan, summary, created_at, updated_at FROM seo_cleanup_batches WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        batch = cur.fetchone()
+    except errors.UndefinedTable:
+        return jsonify({"ok": False, "error": "SEO cleanup workflow is not installed"}), 503
+    finally:
+        conn.close()
+    if not batch:
+        return jsonify({"ok": False, "error": "No prepared SEO cleanup plan is available. Run a fresh SEO measurement."}), 404
+    batch = dict(batch)
+    plan = _parse_jsonb(batch.get("plan"))
+    groups = plan.get("groups") if isinstance(plan, dict) else []
+    return jsonify({"ok": True, "brand_id": brand_id, "batch_id": batch.get("id"), "audit_id": batch.get("audit_id"), "plan_hash": batch.get("plan_hash"), "revision": batch.get("revision"), "status": batch.get("status"), "summary": _parse_jsonb(batch.get("summary")), "groups": groups, "created_at": batch.get("created_at"), "updated_at": batch.get("updated_at")})
+
+
+@app.route("/api/brands/<int:brand_id>/seo-cleanup/approve", methods=["POST"])
+def seo_cleanup_approve(brand_id):
+    """Approve one immutable worker-prepared cleanup plan by hash."""
+    payload = request.get_json(silent=True) or {}
+    batch_id, plan_hash = payload.get("batch_id"), payload.get("plan_hash")
+    if not batch_id or not plan_hash:
+        return jsonify({"ok": False, "error": "batch_id and plan_hash are required"}), 400
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, project_id FROM brands WHERE id=%s FOR UPDATE", (brand_id,))
+        brand = cur.fetchone()
+        if not brand:
+            return jsonify({"ok": False, "error": "Brand not found"}), 404
+        cur.execute("SELECT id, created_at FROM audits WHERE brand_id=%s AND audit_type='seo_measurement' ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        latest_audit = cur.fetchone()
+        cur.execute("SELECT id, audit_id, plan_hash, status, revision, summary FROM seo_cleanup_batches WHERE id=%s AND brand_id=%s FOR UPDATE", (batch_id, brand_id))
+        batch = cur.fetchone()
+        if not batch:
+            return jsonify({"ok": False, "error": "Prepared cleanup batch not found"}), 404
+        if batch.get("plan_hash") != str(plan_hash):
+            return jsonify({"ok": False, "error": "Cleanup plan changed. Reload the latest prepared batch."}), 409
+        if latest_audit and batch.get("audit_id") != latest_audit.get("id"):
+            return jsonify({"ok": False, "error": "Cleanup plan is stale. Run or wait for the latest SEO measurement.", "latest_audit_id": latest_audit.get("id")}), 409
+        if batch.get("status") in {"verified", "cancelled"}:
+            return jsonify({"ok": False, "error": "Cleanup batch is already %s" % batch.get("status")}), 409
+        ensure_agency_scripts()
+        from publication_settings import project_destination
+        destination = project_destination(brand.get("project_id"))
+        if not isinstance(destination, dict) or not destination.get("credential_path"):
+            return jsonify({"ok": False, "error": "Approved Ghost publication destination is not configured for this project"}), 409
+        cur.execute("SELECT id, status FROM tasks WHERE type='seo_cleanup' AND params->>'batch_id'=%s AND params->>'phase'='apply' ORDER BY id DESC LIMIT 1", (str(batch_id),))
+        existing = cur.fetchone()
+        if existing and existing.get("status") in {"queued", "running", "done"}:
+            return jsonify({"ok": True, "batch_id": batch_id, "task_id": existing.get("id"), "deduplicated": True, "receipt": {"status": batch.get("status"), "verification": "pending"}})
+        params = {"brand_id": brand_id, "project_id": brand.get("project_id"), "batch_id": batch_id, "approved_plan_hash": str(plan_hash), "approved": True, "phase": "apply", "destination": {key: destination.get(key) for key in ("type", "credential_path", "base_url") if destination.get(key)}}
+        cur.execute("UPDATE seo_cleanup_batches SET status='approved', updated_at=now() WHERE id=%s", (batch_id,))
+        cur.execute("INSERT INTO tasks (type,status,params,triggered_by) VALUES ('seo_cleanup','queued',%s,'dashboard-seo-cleanup-approval') RETURNING id", (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+        return jsonify({"ok": True, "batch_id": batch_id, "task_id": task_id, "deduplicated": False, "receipt": {"brand_id": brand_id, "batch_id": batch_id, "plan_hash": str(plan_hash), "revision": batch.get("revision"), "status": "approved", "verification": "pending"}}), 201
+    except errors.UndefinedTable:
+        conn.rollback()
+        return jsonify({"ok": False, "error": "SEO cleanup workflow is not installed"}), 503
+    finally:
+        conn.close()
+
+
+@app.route("/api/brands/<int:brand_id>/seo-cleanup/<int:batch_id>/notify", methods=["POST"])
+def seo_cleanup_notify_retry(brand_id, batch_id):
+    """Retry one deduplicated Discord receipt delivery for a completed batch."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, plan_hash, status FROM seo_cleanup_batches WHERE id=%s AND brand_id=%s", (batch_id, brand_id))
+        batch = cur.fetchone()
+        if not batch:
+            return jsonify({"ok": False, "error": "Cleanup batch not found"}), 404
+        cur.execute("SELECT id, status FROM tasks WHERE type='seo_cleanup_notify' AND params->>'batch_id'=%s AND status IN ('queued','running','done') ORDER BY id DESC LIMIT 1", (str(batch_id),))
+        existing = cur.fetchone()
+        if existing:
+            return jsonify({"ok": True, "task_id": existing.get("id"), "deduplicated": True, "batch_status": batch.get("status")})
+        params = {"brand_id": brand_id, "batch_id": batch_id, "plan_hash": batch.get("plan_hash"), "phase": "notify"}
+        cur.execute("INSERT INTO tasks (type,status,params,triggered_by) VALUES ('seo_cleanup_notify','queued',%s,'dashboard-seo-cleanup-notify') RETURNING id", (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+        return jsonify({"ok": True, "task_id": task_id, "deduplicated": False, "batch_status": batch.get("status")}), 201
+    except errors.UndefinedTable:
+        conn.rollback()
+        return jsonify({"ok": False, "error": "SEO cleanup notification workflow is not installed"}), 503
+    finally:
+        conn.close()
 
 
 @app.route("/api/brands/<int:brand_id>/seo-measurement", methods=["POST"])
@@ -1457,7 +1820,7 @@ def _render_content_body(ci, item_id, conn, cur):
         except json.JSONDecodeError:
             blocks = None
     if isinstance(blocks, list) and blocks:
-        sys.path.insert(0, "/home/agency/agency-os/scripts")
+        ensure_agency_scripts()
         import importlib
         cp = importlib.import_module("content_pipeline")
         return banner + cp.render_pipeline_css() + \
@@ -1469,6 +1832,9 @@ def _render_content_body(ci, item_id, conn, cur):
         except json.JSONDecodeError:
             structured = None
     if structured:
+        if isinstance(structured, dict) and structured.get('blocks') and ci.get('status') == 'outline':
+            # Outlines are review plans, not composed article sections.
+            return banner + render_template('outline_preview.html', ci=ci, outline=structured)
         parts = [f"<h1>{structured.get('title', ci['title'])}</h1>"]
         if structured.get('meta_description'):
             parts.append(f"<p><i>{structured['meta_description']}</i></p>")
@@ -1487,13 +1853,50 @@ def _render_content_body(ci, item_id, conn, cur):
     return banner + f"<h1>{ci['title']}</h1>{html}"
 
 
+PUBLICATION_COLUMNS = """
+ (SELECT pb.project_id FROM brands pb WHERE pb.id=ci.brand_id) AS publication_project_id,
+ (SELECT c.intake_params->'publication' FROM clients c WHERE c.brand_id=ci.brand_id
+  ORDER BY c.id DESC LIMIT 1) AS publication_config,
+ EXISTS(SELECT 1 FROM services svc JOIN brands pb ON pb.project_id=svc.project_id
+        WHERE pb.id=ci.brand_id AND position('-ghost-' in svc.container)>0) AS ghost_service
+"""
+
+
+def publication_context(item):
+    """Describe configured capability, never mistake CMS presence for an adapter."""
+    config = _parse_jsonb(item.get('publication_config'))
+    config = config if isinstance(config, dict) else {}
+    ensure_agency_scripts()
+    from publication_settings import project_destination
+    connection = project_destination(item.get('publication_project_id'))
+    if connection:
+        config = connection
+    driver = str(config.get('type') or '').lower()
+    name = 'Ghost' if item.get('ghost_service') or driver == 'ghost' else driver.title() or 'Not configured'
+    ready = driver == 'wordpress' and all(isinstance(config.get(k), str) and config[k].strip()
+                                         for k in ('base_url', 'username', 'credential_ref'))
+    ready = bool(ready and config['base_url'].startswith('https://'))
+    message = 'Publishing is not connected for this project. Configure its publishing integration once, not for each article.'
+    if name == 'Ghost':
+        ready = bool(config.get('type') == 'ghost' and config.get('enabled'))
+        message = ('Publishes this reviewed draft to the project’s Ghost blog. No email or newsletter will be sent.' if ready else
+                   'This project uses Ghost. Its publishing connection is not enabled yet. You can export the draft for manual review in the blog editor.')
+    elif ready:
+        message = 'Uses the project’s saved publishing connection. Confirm only when this draft is ready to go public.'
+    if ready and driver != 'ghost' and any(isinstance(b, dict) and b.get('type') == 'editorial_visual' for b in item.get('content_blocks') or []):
+        ready = False
+        message = 'The current publishing adapter cannot preserve this draft’s visuals. Export HTML for review; dashboard publication is blocked to avoid losing them.'
+    return {'name': name, 'ready': ready, 'message': message,
+            'url': config.get('base_url', '') if ready else ''}
+
+
 @app.route("/content/<int:item_id>/preview")
 def content_preview(item_id):
     conn = models.db()
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT ci.*, b.name AS brand_name "
+            "SELECT ci.*, b.name AS brand_name, " + PUBLICATION_COLUMNS +
             "FROM content_items ci LEFT JOIN brands b ON b.id=ci.brand_id "
             "WHERE ci.id=%s", (item_id,))
         ci = cur.fetchone()
@@ -1510,48 +1913,61 @@ def content_preview(item_id):
         if isinstance(s, dict):
             target_keyword = s.get("target_keyword", "") or ""
         blocks = _parse_jsonb(ci.get("content_blocks"))
+        from content_quality import validate_content
+        quality = validate_content(blocks, 'publish') if ci.get('status') != 'outline' else {'findings': [], 'blocking': False}
         has_image_slots = isinstance(blocks, list) and any(
             isinstance(block, dict) and block.get("type") == "image_slot" for block in blocks
         )
         updated_fmt = fmt_ts(ci.get("updated_at") or ci.get("created_at"))
+        visual_history = []
+        if ci.get('status') == 'draft':
+            cur.execute("SELECT id,created_at,result_ref::jsonb->>'after_revision' AS after_revision FROM tasks "
+                        "WHERE type='content_visual_edit' AND status='done' AND params->>'content_item_id'=%s ORDER BY id DESC LIMIT 8", (str(item_id),))
+            visual_history = cur.fetchall()
+        published_url = ''
+        if ci.get('status') == 'published' and ci.get('publish_task_id'):
+            cur.execute("SELECT result_ref FROM tasks WHERE id=%s AND type='publish_content' AND status='done'", (ci['publish_task_id'],))
+            receipt_row = cur.fetchone()
+            receipt = _parse_jsonb((receipt_row or {}).get('result_ref'))
+            if isinstance(receipt, dict) and str(receipt.get('url', '')).startswith('https://'):
+                published_url = receipt['url']
         return render_template("content_preview.html", active='content',
                                ci=ci, body_html=body_html,
                                target_keyword=target_keyword,
                                has_image_slots=has_image_slots,
-                               updated_fmt=updated_fmt)
+                               updated_fmt=updated_fmt, visual_revision=content_revision(ci),
+                               visual_blocks=blocks if isinstance(blocks, list) else [],
+                               visual_facts=s.get('facts', []) if isinstance(s, dict) else [],
+                               visual_history=visual_history, publication=publication_context(ci), published_url=published_url,
+                               quality=quality)
     finally:
         conn.close()
 
 
 @app.route("/content/<int:item_id>/images", methods=["POST"])
 def content_images(item_id):
-    """Generate + store slot images for a content item's image_slots (MinIO)."""
+    """Keep the legacy endpoint explicit instead of silently making placeholders."""
+    return jsonify(ok=False, error='Automatic placeholder sourcing is retired. Use the asset library to search, upload and review a real image.'), 409
+
+
+@app.route("/content/<int:ci_id>/download-html")
+def content_download_html(ci_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT content_blocks FROM content_items WHERE id=%s", (item_id,))
-        row = cur.fetchone()
-        if not row:
-            return jsonify({"ok": False, "error": "not found"}), 404
-        blocks = row.get("content_blocks")
-        if isinstance(blocks, str):
-            try:
-                blocks = json.loads(blocks)
-            except json.JSONDecodeError:
-                blocks = None
-        if not isinstance(blocks, list):
-            return jsonify({"ok": False, "error": "no content_blocks"}), 400
-        sys.path.insert(0, "/home/agency/agency-os/scripts")
-        import importlib
-        cp = importlib.import_module("content_pipeline")
-        blocks = cp.source_slot_images(item_id, blocks)
-        blocks = cp.ensure_slot_images(item_id, blocks)
-        cur.execute("UPDATE content_items SET content_blocks=%s, updated_at=now() WHERE id=%s",
-                    (json.dumps(blocks), item_id))
-        conn.commit()
-        made = [b for b in blocks if b.get("type") == "image_slot" and b.get("url")]
-        return jsonify({"ok": True, "slots": len(made),
-                        "urls": [b["url"] for b in made]})
+        cur.execute('SELECT * FROM content_items WHERE id=%s', (ci_id,))
+        ci = cur.fetchone()
+        if not ci:
+            return 'Not found', 404
+        rendered = _render_content_body(ci, ci_id, conn, cur)
+        response = make_response('<!doctype html><html lang="en"><meta charset="utf-8">'
+                                 '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src https:; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'">'
+                                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                                 '<title>Article review export</title><body>' + rendered + '</body></html>')
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.headers['Content-Disposition'] = f'attachment; filename="content-{ci_id}.html"'
+        response.headers['Content-Security-Policy'] = "default-src 'none'; img-src https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; sandbox"
+        return response
     finally:
         conn.close()
 
@@ -1580,18 +1996,46 @@ def content_approve(ci_id):
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id,status,publish_task_id FROM content_items WHERE id=%s FOR UPDATE", (ci_id,))
+        cur.execute("SELECT ci.*," +
+                    PUBLICATION_COLUMNS + " FROM content_items ci WHERE ci.id=%s FOR UPDATE OF ci", (ci_id,))
         item = cur.fetchone()
         if not item:
             return jsonify({"ok": False, "error": "not found"}), 404
         if item["status"] not in ("draft", "approved", "needs_publish_input", "publish_failed"):
             return jsonify({"ok": False, "error": f"content is {item['status']}, not publishable"}), 409
+        from content_quality import publication_blockers
+        blocks_for_check = item.get('content_blocks') or ([{'type': 'prose', 'markdown': item['body']}] if item.get('body') else [])
+        blockers = publication_blockers(blocks_for_check)
+        if blockers:
+            return jsonify(ok=False, error='Resolve the content checks before publishing', findings=blockers), 409
+        for block in item.get('content_blocks') or []:
+            if isinstance(block, dict) and block.get('type') == 'editorial_visual':
+                try:
+                    if block.get('reviewed') is not True:
+                        raise ValueError('Preview and review every visual before publication')
+                    visual_module().validate_visual(block, (item.get('structured') or {}).get('facts') or [])
+                except (ValueError, TypeError, AttributeError) as exc:
+                    return jsonify(ok=False, error=str(exc)), 409
         destination = {
             "type": (payload.get("destination_type") or "").strip(),
             "base_url": (payload.get("base_url") or "").strip(),
             "username": (payload.get("username") or "").strip(),
             "credential_ref": (payload.get("credential_ref") or "").strip(),
         }
+        destination = {key: value for key, value in destination.items() if value}
+        context = publication_context(item)
+        if (item.get('ghost_service') and not context['ready']) or (not destination and not context['ready']):
+            return jsonify(ok=False, error=context['message']), 409
+        approved_digest = None
+        approved_destination = None
+        if context['name'] == 'Ghost':
+            if payload.get('revision') != content_revision(item):
+                return jsonify(ok=False, error='This draft changed. Reload the preview and review it before publishing.'), 409
+            from ghost_publisher import content_digest
+            approved_digest = content_digest(item)
+            from publication_settings import project_destination, destination_digest
+            approved_destination = destination_digest(project_destination(item.get('publication_project_id')))
+            destination = {}
         if item.get("publish_task_id"):
             cur.execute("SELECT id,type,status,params FROM tasks WHERE id=%s FOR UPDATE",
                         (item["publish_task_id"],))
@@ -1602,6 +2046,10 @@ def content_approve(ci_id):
                     return jsonify({"ok": True, "task_id": existing["id"], "existing": True})
                 if existing["status"] == "needs_input":
                     params = _resume_workflow_params("publish_content", _parse_jsonb(existing.get("params")), payload)
+                    if approved_digest:
+                        params['approved_digest'] = approved_digest
+                        params['approved_destination'] = approved_destination
+                        params['destination'] = {}
                     cur.execute(
                         "UPDATE tasks SET params=%s,status='queued',error=NULL,result_ref=NULL,"
                         "started_at=NULL,finished_at=NULL,progress=0,progress_text='resumed with publication input' "
@@ -1614,6 +2062,8 @@ def content_approve(ci_id):
                 if existing["status"] == "failed":
                     return jsonify({"ok": False, "error": "publication may have partially completed; inspect the linked failed task before an explicit re-run"}), 409
         params = json.dumps({"content_item_id": ci_id, "destination": destination,
+                             "approved_digest": approved_digest,
+                             "approved_destination": approved_destination,
                              "instructions": (payload.get("instructions") or "")[:2000]})
         cur.execute(
             "INSERT INTO tasks (type,status,params,triggered_by) "
@@ -1634,12 +2084,34 @@ def content_approve(ci_id):
 
 @app.route("/content/<int:ci_id>/regenerate", methods=["POST"])
 def content_regenerate(ci_id):
+    payload = request.get_json(silent=True) or {}
     conn = models.db()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE content_items SET status='draft', body=NULL WHERE id=%s", (ci_id,))
+        from content_visuals import get_item
+        item = get_item(cur, ci_id)
+        if payload.get('revision') != content_revision(item):
+            return jsonify(ok=False, error='Reload and review this draft before regenerating it'), 409
+        structured = dict(item.get('structured') or {})
+        if not structured.get('blocks') or not structured.get('target_keyword'):
+            return jsonify(ok=False, error='A saved outline and target keyword are required'), 409
+        before = {key: item.get(key) for key in ('body', 'content_blocks', 'structured')}
+        cur.execute("INSERT INTO tasks(type,status,params,triggered_by,result_ref,started_at,finished_at) "
+                    "VALUES ('content_regeneration_snapshot','done',%s,'dashboard-regenerate',%s,now(),now()) RETURNING id",
+                    (json.dumps({'content_item_id': ci_id}), json.dumps({'before': before, 'publication': False})))
+        snapshot = cur.fetchone()['id']
+        for key in ('visual_base_body', 'visual_review', 'quality_report', 'link_report'):
+            structured.pop(key, None)
+        cur.execute("INSERT INTO tasks(type,status,params,triggered_by) VALUES ('content_compose','queued',%s,'dashboard-regenerate') RETURNING id",
+                    (json.dumps({'content_item_id': ci_id, 'target_keyword': structured['target_keyword'], 'snapshot_task_id': snapshot}),))
+        task_id = cur.fetchone()['id']
+        cur.execute("UPDATE content_items SET status='outline',body=NULL,content_blocks='[]'::jsonb,structured=%s,task_id=%s,updated_at=now() WHERE id=%s",
+                    (json.dumps(structured), task_id, ci_id))
         conn.commit()
-        return jsonify({"ok": True})
+        return jsonify(ok=True, task_id=task_id, snapshot_task_id=snapshot)
+    except (ValueError, PermissionError, LookupError) as exc:
+        conn.rollback()
+        return jsonify(ok=False, error=str(exc)), 409
     finally:
         conn.close()
 
@@ -1691,7 +2163,7 @@ def job_toggle(job_id):
 @app.route("/operations/jobs/<int:job_id>/run", methods=["POST"])
 def job_run(job_id):
     subprocess.Popen(
-        ["bash", "/home/agency/agency-os/scripts/run-job.sh", str(job_id), "manual"],
+        ["bash", os.path.join(ensure_agency_scripts(), "run-job.sh"), str(job_id), "manual"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return jsonify({"ok": True})
@@ -1957,6 +2429,8 @@ def task_rerun(tid):
         src = cur.fetchone()
         if not src:
             return jsonify({"ok": False, "error": "not found"}), 404
+        if src['type'] in ('content_visual_edit', 'content_visual_undo'):
+            return jsonify(ok=False, error='Visual revisions cannot be replayed. Open the draft visual studio and preview a new edit.'), 409
         try:
             base_params = json.loads(src["params"]) if isinstance(src["params"], str) else (src["params"] or {})
             base_params = dict(base_params) if isinstance(base_params, dict) else {}
@@ -2100,6 +2574,11 @@ def suggestion_reject(sid):
 
 @app.route("/api/suggestions/<int:sid>/generate", methods=["POST"])
 def suggestion_generate(sid):
+    """Reject the legacy bypass so all content enters research and outline review."""
+    return jsonify({"ok": False, "error": "Direct draft generation is retired. Create a reviewed research plan, inspect its outline, then compose."}), 410
+
+    # Kept below for database compatibility during rolling upgrades. It is
+    # unreachable by design and can be removed after old clients are retired.
     conn = models.db()
     try:
         cur = conn.cursor()

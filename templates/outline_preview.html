@@ -1,0 +1,11 @@
+<section class="card">
+  <h1>{{ ci.title }}</h1>
+  <p>This is an outline for review, not a completed article.</p>
+  <p><a class="btn" href="/content/new?outline={{ ci.id }}">Review evidence and compose</a></p>
+  <ol>{% for block in outline.blocks %}
+    <li><strong>{{ block.type }}</strong>: {{ block.brief }}
+      {% if block.alt %}<p>Planned image: {{ block.alt }}</p>{% endif %}
+      {% if block.fact_ids %}<small>Evidence: {{ block.fact_ids|join(', ') }}</small>{% endif %}
+    </li>
+  {% endfor %}</ol>
+</section>

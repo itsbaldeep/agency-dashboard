@@ -58,6 +58,13 @@
   </div>
 
   {% if blocks %}
+  {% set planned_visuals = blocks|selectattr('type', 'in', ['image_slot', 'chart', 'table', 'steps', 'key_takeaways', 'callout'])|list %}
+  <div class="card" aria-label="Visual review">
+    <strong>Visual review: {{ planned_visuals|length }} structured or visual blocks planned</strong>
+    <p>Check whether examples need annotation, comparisons need a table, or a process needs a diagram.
+      Images should explain something. Statistical charts require verified data, not decoration.
+      After composition, use “Add or revise visuals” to preview and save editorial graphics, tables, checklists or sourced charts.</p>
+  </div>
   <details style="margin:10px 0;" {% if not facts %}open{% endif %}>
     <summary><strong>Verified evidence: {{ facts|length }} fact{{ '' if facts|length == 1 else 's' }}</strong></summary>
     {% if facts %}

@@ -1,0 +1,64 @@
+<div class="card" id="growth-report">
+  <div class="card-header">
+    <span class="card-title">Growth measurement</span>
+    <span class="badge badge-dim">{{ growth_report.status|replace('_', ' ')|title }}</span>
+  </div>
+  {% if growth_report.status == 'unavailable' %}
+  <p class="empty">{{ growth_report.reason or 'Run SEO measurement to collect comparable growth data' }}</p>
+  {% else %}
+  <p class="subtle" style="margin-top:0;">Exact non-overlapping windows are compared. A zero is recorded as zero; unavailable sources remain unavailable. GA4 users are observed users, not confirmed signups or active accounts. Key events are configured analytics events, not necessarily leads.</p>
+  <div class="table-wrap mt-2">
+    <table>
+      <thead><tr><th>Window</th><th>Dates</th><th>GSC impressions</th><th>GSC clicks</th><th>GA4 users</th><th>GA4 sessions</th><th>Key events</th></tr></thead>
+      <tbody>
+        {% for label, window in [('Current', growth_report.current), ('Prior', growth_report.prior)] %}
+        <tr>
+          <td><b>{{ label }}</b></td>
+          <td class="mono">{{ window.start or '-' }}{% if window.end %} to {{ window.end }}{% endif %}</td>
+          <td>{% if window.gsc.impressions is not none %}{{ window.gsc.impressions }}{% else %}<span class="subtle">unavailable</span>{% endif %}</td>
+          <td>{% if window.gsc.clicks is not none %}{{ window.gsc.clicks }}{% else %}<span class="subtle">unavailable</span>{% endif %}</td>
+          <td>{% if window.ga4.users is not none %}{{ window.ga4.users }}{% else %}<span class="subtle">unavailable</span>{% endif %}</td>
+          <td>{% if window.ga4.sessions is not none %}{{ window.ga4.sessions }}{% else %}<span class="subtle">unavailable</span>{% endif %}</td>
+          <td>{% if window.ga4.keyEvents is not none %}{{ window.ga4.keyEvents }}{% else %}<span class="subtle">unavailable</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="mt-2">
+    <b>Trend</b>
+    {% if growth_report.comparison.status in ['available', 'comparable'] %}
+      <span class="badge badge-green">comparable</span>
+      {% if growth_report.comparison.reason %}<span class="subtle">{{ growth_report.comparison.reason }}</span>{% endif %}
+      {% if growth_report.comparison.deltas %}
+      <div class="chips mt-1">
+        {% for source_name, source_deltas in growth_report.comparison.deltas.items() %}
+          {% if source_deltas is mapping %}
+            {% for key, value in source_deltas.items() %}
+              {% if value is mapping and value.get('trend') %}<span class="pill"><span class="pill-label">{{ source_name|upper }} {{ key|replace('_', ' ')|title }}</span>{{ value.get('trend') }}{% if value.get('percent') is not none %} ({{ value.get('percent') }}%){% endif %}</span>{% endif %}
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% else %}
+      <span class="badge badge-dim">{{ growth_report.comparison.status|replace('_', ' ') }}</span>
+      <span class="subtle">{{ growth_report.comparison.reason or 'More comparable evidence is required before describing a trend.' }} Thresholds are heuristics, not statistical significance tests.</span>
+    {% endif %}
+  </div>
+  {% if growth_report.followups %}
+  <div class="mt-2"><b>Deterministic follow-ups</b>
+    <ol style="margin:6px 0 0;padding-left:20px;">
+      {% for item in growth_report.followups %}
+      <li>
+        {% if item is mapping %}
+          <b>{{ item.get('title') or item.get('action') or 'Follow-up required' }}</b>{% if item.get('reason') %}: {{ item.get('reason') }}{% endif %}
+        {% else %}{{ item }}{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+  <div class="subtle mt-2">Captured {{ growth_report.freshness.captured_at or '-' }}{% if growth_report.freshness.gsc_timezone %} · GSC timezone: {{ growth_report.freshness.gsc_timezone }}{% endif %}{% if growth_report.freshness.ga4_timezone %} · GA4 timezone: {{ growth_report.freshness.ga4_timezone }}{% endif %}</div>
+  {% endif %}
+</div>

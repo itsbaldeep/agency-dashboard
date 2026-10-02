@@ -170,6 +170,7 @@ select option{background:var(--surface);color:var(--text)}
 ::placeholder{color:var(--text-dim)}
 
 .workflow-dialog{
+  margin:auto;inset:0;
   width:min(560px,calc(100vw - 28px));max-height:calc(100vh - 40px);overflow:auto;
   background:var(--surface);color:var(--text);border:1px solid var(--border-hover);
   border-radius:var(--radius);padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.55);
@@ -520,7 +521,7 @@ details.card[open] > summary:before{content:"\25BE "}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px}
 .content-actionbar-brand{font-size:12px}
 .content-actionbar-date{font-size:11px}
-.content-actionbar-actions{flex-shrink:0}
+.content-actionbar-actions{display:flex;flex-wrap:wrap;gap:6px;min-width:0;max-width:100%;flex-shrink:1}
 .content-preview-body{background:var(--surface);border:1px solid var(--border);
   border-radius:var(--radius);padding:24px 28px;min-height:200px}
 .content-preview-body h1{font-size:24px;font-weight:700;color:var(--text-bright);margin-bottom:12px}
@@ -538,6 +539,25 @@ details.card[open] > summary:before{content:"\25BE "}
 .content-preview-body details.faq summary{cursor:pointer;font-weight:600;color:var(--text-bright);font-size:13px}
 .content-preview-body details.faq summary::-webkit-details-marker{color:var(--accent)}
 .content-preview-body .lead{font-size:15px;color:var(--text);border-left:3px solid var(--accent);padding-left:12px;margin:12px 0}
+.content-preview-body{--text-bright:#173b2c;--text:#273f33;--text-muted:#53665b;--surface-2:#f2f7f3;--bg-alt:#f5f8f5;--border:#d4dfd7;--accent:#176445;background:#fff;color:#273f33}
+.content-preview-body .pipeline-article{font-size:16px;line-height:1.6;color:#273f33}
+.content-preview-body .pipeline-article h1{font-size:clamp(1.65rem,4vw,2rem);line-height:1.2;color:#173b2c}
+.content-preview-body .pipeline-article h2{font-size:clamp(1.25rem,3vw,1.5rem);line-height:1.35;color:#173b2c}
+.content-preview-body .pipeline-article a{color:#176445;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
+.content-preview-body .pipeline-article figcaption{font-size:.85rem;line-height:1.5;color:#53665b}
+.content-preview-body .pipeline-article .lead{font-size:1rem;color:#273f33}
+
+/* Keep the article readable, rather than the review controls sticky, on phones. */
+@media(max-width:640px){
+  .content-actionbar{position:static;padding:10px;gap:8px;margin-bottom:10px}
+  .content-actionbar-info{width:100%;gap:6px}
+  .content-actionbar-title{max-width:calc(100% - 28px);white-space:normal;font-size:14px}
+  .content-actionbar-actions{display:flex;flex-wrap:wrap;gap:6px;min-width:0;flex-shrink:1}
+  .content-preview-body{padding:12px;min-width:0}
+  #visual-editor{padding:12px}
+  #visual-form,#visual-form fieldset,#visual-form label{min-width:0}
+  #visual-form input,#visual-form select,#visual-form textarea{max-width:100%;font-size:16px}
+}
 
 /* ── Content list clickable rows ─────────────────────────── */
 .content-row{display:block;text-decoration:none;color:inherit}
