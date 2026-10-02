@@ -343,6 +343,7 @@ def _normalise_activation_report(seo_data):
         "coverage": {},
         "signup_cohort_totals": {},
         "health": {},
+        "retention": {"status": "unavailable", "counts": {}, "email_status": "unavailable"},
     }
     raw = seo_data.get("activation") if isinstance(seo_data, dict) else None
     if not isinstance(raw, dict) or raw.get("schema_version") != 1:
@@ -354,6 +355,17 @@ def _normalise_activation_report(seo_data):
     totals = raw.get("totals") if isinstance(raw.get("totals"), dict) else {}
     coverage = raw.get("coverage") if isinstance(raw.get("coverage"), dict) else {}
     health = raw.get("health") if isinstance(raw.get("health"), dict) else {}
+    retention_raw = raw.get("retention") if isinstance(raw.get("retention"), dict) else {}
+    retention_keys = ("notifications_generated", "notifications_read", "notifications_clicked", "unread_notifications", "active_watchlist_jobs", "active_saved_searches", "digest_previews", "email_blocked", "email_failed")
+    retention_counts = {}
+    for key in retention_keys:
+        value = retention_raw.get("counts", {}).get(key) if isinstance(retention_raw.get("counts"), dict) else None
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 10**12:
+            retention_counts[key] = value
+    retention_status = retention_raw.get("status") if retention_raw.get("status") in {"available", "unavailable"} else "unavailable"
+    if not retention_counts:
+        retention_status = "unavailable"
+    email_status = retention_raw.get("email_status") if retention_raw.get("email_status") in {"not_connected", "disabled", "ready", "unavailable"} else "unavailable"
     allowed = ("signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served")
     clean_totals = {key: _growth_number(totals.get(key)) for key in allowed}
     if any(value is None for value in clean_totals.values()) and status == "available":
@@ -382,6 +394,7 @@ def _normalise_activation_report(seo_data):
         "coverage": clean_coverage,
         "signup_cohort_totals": cohort_totals,
         "health": {"last_event_at": health.get("last_event_at"), "status": health.get("status") or "unknown"},
+        "retention": {"status": retention_status, "counts": retention_counts, "email_status": email_status},
     }
 
 
