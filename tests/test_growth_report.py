@@ -146,6 +146,34 @@ class GrowthReportTests(unittest.TestCase):
         self.assertEqual(len(groups), 2)
         self.assertEqual(groups[1]["finding_ids"], ["a", "b"])
 
+    def test_populated_cleanup_groups_render_urls_evidence_and_before_after(self):
+        groups = [{
+            "rule": "missing_description",
+            "items": [{
+                "url": "https://trueapply.in/guide",
+                "evidence_id": "seo-123",
+                "precondition": {"observed": "missing"},
+                "expected": "Add a unique meta description",
+            }],
+        }]
+        with dashboard.app.test_request_context("/"):
+            html = dashboard.render_template(
+                "brand_report.html",
+                brand={"id": 31, "name": "TrueApply"},
+                audit_summary={}, audit_history=[], domain="", audit_date_fmt="", capabilities=[],
+                full_audit_run=None, full_audit_children=[], marketing_assessment=None,
+                marketing_assessment_stages=[], brand_properties=[], competitors=[], audit=None,
+                seo_audit=None, seo_summary={}, seo_data={}, suggestions=[], visibility_rows=[],
+                ch_error=False, content_items=[], recent_tasks=[], content_by_suggestion={},
+                task_by_suggestion={}, agent_allowed=False, repo_url=None, project_id=None,
+                measurement_setup={},
+                seo_cleanup_groups=groups,
+                seo_cleanup_batch={"id": 4, "status": "proposed", "plan_hash": "hash-1", "summary": {}},
+            )
+        self.assertIn("https://trueapply.in/guide", html)
+        self.assertIn("seo-123", html)
+        self.assertIn("missing / Add a unique meta description", html)
+
     def test_cleanup_approval_requires_current_batch_and_queues_apply_task(self):
         class Cursor:
             def __init__(self, stale=False): self.sql = ''; self.calls = []; self.stale = stale
