@@ -1,5 +1,6 @@
 import sys
 import unittest
+import importlib.util
 from pathlib import Path
 from unittest import mock
 
@@ -136,6 +137,44 @@ class GrowthReportTests(unittest.TestCase):
     def test_activation_malformed_available_snapshot_is_unavailable(self):
         report = dashboard._normalise_activation_report({"activation": {"schema_version": 1, "status": "available", "totals": {}}})
         self.assertEqual(report["status"], "unavailable")
+
+    def test_activation_retention_counts_survive_normalisation_without_payloads(self):
+        raw = {"activation": {
+            "schema_version": 1, "status": "available",
+            "totals": {key: 0 for key in ["signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served"]},
+            "retention": {"status": "available", "counts": {"notifications_generated": 4, "notifications_read": 2, "notifications_clicked": 1, "unread_notifications": 2, "active_watchlist_jobs": 3, "active_saved_searches": 1, "digest_previews": 2, "email_blocked": 5, "email_failed": 0, "recipients": ["private@example.test"]}, "email_status": "not_connected"},
+        }}
+        report = dashboard._normalise_activation_report(raw)
+        self.assertEqual(report["retention"]["counts"]["notifications_generated"], 4)
+        self.assertEqual(report["retention"]["email_status"], "not_connected")
+        self.assertNotIn("recipients", report["retention"])
+
+    def test_activation_missing_retention_remains_backward_compatible(self):
+        raw = {"activation": {"schema_version": 1, "status": "available", "totals": {key: 0 for key in ["signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served"]}}}
+        report = dashboard._normalise_activation_report(raw)
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["retention"]["status"], "unavailable")
+
+    def test_core_collector_contract_reaches_dashboard_without_evidence_loss(self):
+        scripts = Path("/home/agency/core/agency-os/scripts")
+        sys.path.insert(0, str(scripts))
+        try:
+            spec = importlib.util.spec_from_file_location("seo_measurement_contract", scripts / "seo_measurement.py")
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            collected = module.normalize_activation({
+                "totals": {key: 0 for key in ["signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served"]},
+                "retention": {"notifications_generated": 7, "notifications_read": 3, "email_status": "not_connected"},
+            })
+        finally:
+            sys.path.pop(0)
+        report = dashboard._normalise_activation_report({"activation": collected})
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["totals"]["kit_evidence_only"], 0)
+        self.assertEqual(report["retention"]["counts"]["notifications_generated"], 7)
+        self.assertEqual(report["retention"]["email_status"], "not_connected")
 
     def test_seo_cleanup_groups_same_rule_and_url(self):
         groups = dashboard._seo_cleanup_groups([
