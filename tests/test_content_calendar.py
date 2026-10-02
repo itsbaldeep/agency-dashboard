@@ -166,6 +166,89 @@ class ContentCalendarTests(unittest.TestCase):
         self.assertEqual(captured["existing_content"][0]["content_kind"], "help")
         self.assertEqual(captured["plans"][0]["display_status"], "published")
 
+    def test_schedule_existing_outline_creates_one_linked_calendar_without_research(self):
+        class ExistingCursor:
+            def __init__(self): self.sql = ""; self.calls = []
+            def execute(self, sql, params=()): self.sql, self.params = sql, params; self.calls.append((sql, params))
+            def fetchone(self):
+                if "FROM content_items" in self.sql:
+                    return {"id": 27, "brand_id": 1, "title": "Existing outline", "content_type": "article", "status": "outline", "structured": {"target_keyword": "existing topic", "content_kind": "article", "research_id": 9}}
+                if "FROM brands" in self.sql:
+                    return BRAND
+                if "FROM content_research" in self.sql:
+                    return {"audit_id": "57"}
+                if "INSERT INTO content_calendar" in self.sql:
+                    return {"id": 70}
+                return None
+            def fetchall(self): return []
+        cursor = ExistingCursor()
+        conn = Conn(cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-20"})
+        self.assertEqual(response.status_code, 201)
+        self.assertFalse(response.get_json()["deduplicated"])
+        self.assertFalse(any("INSERT INTO tasks" in sql for sql, _ in cursor.calls))
+        self.assertTrue(any("UPDATE content_items SET structured" in sql for sql, _ in cursor.calls))
+        insert_params = next(params for sql, params in cursor.calls if "INSERT INTO content_calendar" in sql)
+        self.assertEqual(insert_params[7], 57)
+
+    def test_schedule_existing_linked_outline_updates_date_without_duplicate(self):
+        class LinkedCursor:
+            def __init__(self): self.sql = ""; self.calls = []
+            def execute(self, sql, params=()): self.sql, self.params = sql, params; self.calls.append((sql, params))
+            def fetchone(self):
+                if "FROM content_items" in self.sql:
+                    return {"id": 27, "brand_id": 1, "title": "Existing outline", "content_type": "article", "status": "outline", "structured": {"calendar_id": 70, "content_kind": "article"}}
+                if "FROM brands" in self.sql:
+                    return BRAND
+                if "FROM content_calendar" in self.sql:
+                    return {"id": 70, "brand_id": 1, "status": "planned", "task_id": None}
+                return None
+            def fetchall(self): return []
+        cursor = LinkedCursor()
+        conn = Conn(cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-21"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["deduplicated"])
+        self.assertFalse(any("INSERT INTO content_calendar" in sql for sql, _ in cursor.calls))
+
+    def test_schedule_existing_outline_redirects_for_normal_browser_navigation(self):
+        class ExistingCursor:
+            def __init__(self): self.sql = ""; self.calls = []
+            def execute(self, sql, params=()): self.sql, self.params = sql, params; self.calls.append((sql, params))
+            def fetchone(self):
+                if "FROM content_items" in self.sql:
+                    return {"id": 27, "brand_id": 1, "title": "Existing outline", "content_type": "article", "status": "outline", "structured": {"target_keyword": "existing topic", "content_kind": "article"}}
+                if "FROM brands" in self.sql: return BRAND
+                if "INSERT INTO content_calendar" in self.sql: return {"id": 70}
+                return None
+            def fetchall(self): return []
+        cursor = ExistingCursor()
+        with mock.patch.object(dashboard.models, "db", return_value=Conn(cursor)):
+            response = dashboard.app.test_client().post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-08"}, headers={"Accept": "text/html"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/content/calendar?brand_id=1")
+
+    def test_research_rejects_calendar_item_already_linked_to_existing_content(self):
+        class LinkedResearchCursor:
+            def __init__(self): self.sql = ""; self.calls = []
+            def execute(self, sql, params=()): self.sql, self.params = sql, params; self.calls.append((sql, params))
+            def fetchone(self):
+                if "FROM content_calendar" in self.sql:
+                    return {"id": 70, "brand_id": 1, "status": "planned", "task_id": None, "title": "Existing outline", "target_keyword": "existing topic", "competitor_urls": ["https://example.com"]}
+                if "FROM content_items" in self.sql:
+                    return {"id": 27}
+                if "FROM brands" in self.sql: return BRAND
+                return None
+            def fetchall(self): return []
+        cursor = LinkedResearchCursor()
+        with mock.patch.object(dashboard.models, "db", return_value=Conn(cursor)):
+            response = dashboard.app.test_client().post("/content/calendar/70/research")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("already linked", response.get_json()["error"])
+        self.assertFalse(any("INSERT INTO tasks" in sql for sql, _ in cursor.calls))
+
     def test_recommendation_schedule_rejects_stale_entry(self):
         class RecommendationCursor:
             def execute(self, sql, params=()): self.sql = sql

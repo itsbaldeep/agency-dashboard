@@ -5,7 +5,7 @@ import json
 from datetime import date
 from urllib.parse import urlparse
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, redirect, render_template, request
 from psycopg2 import errors
 
 import models
@@ -132,6 +132,12 @@ def _eligible_brand(cur, brand_id, lock=False):
 
 def _error(message, status):
     return jsonify({"ok": False, "error": message}), status
+
+
+def _calendar_success(payload, status, brand_id):
+    if request.accept_mimetypes.accept_html and not request.accept_mimetypes.accept_json:
+        return redirect("/content/calendar?brand_id=%s" % brand_id)
+    return jsonify(payload), status
 
 
 def _active_content_count(cur, brand_id, kind=None):
@@ -368,6 +374,99 @@ def plan_recommendation(recommendation_id):
         conn.close()
 
 
+@content_calendar.post("/content/calendar/content/<int:content_item_id>/schedule")
+def schedule_existing_content(content_item_id):
+    """Attach one existing reviewed outline/draft to a planning date without research or publication."""
+    payload = _payload()
+    try:
+        planned_date = date.fromisoformat(str(payload.get("planned_date")))
+    except (TypeError, ValueError):
+        return _error("planned_date must be YYYY-MM-DD", 400)
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("""SELECT ci.id, ci.brand_id, ci.title, ci.content_type, ci.status, ci.structured,
+                                  b.project_id, p.lifecycle, p.state
+                           FROM content_items ci JOIN brands b ON b.id=ci.brand_id
+                           JOIN projects p ON p.id=b.project_id
+                           WHERE ci.id=%s FOR UPDATE""", (content_item_id,))
+            item = cur.fetchone()
+            if not item:
+                return _error("Content item not found", 404)
+            if item.get("status") not in {"outline", "draft", "approved", "needs_publish_input", "publish_failed"}:
+                return _error("Only an outline or draft can be scheduled", 409)
+            _eligible_brand(cur, item["brand_id"], lock=True)
+            structured = item.get("structured") or {}
+            if isinstance(structured, str):
+                try:
+                    structured = json.loads(structured)
+                except (TypeError, ValueError):
+                    structured = {}
+            if not isinstance(structured, dict):
+                structured = {}
+            kind = structured.get("content_kind") or item.get("content_type") or "article"
+            calendar_id = structured.get("calendar_id")
+            if calendar_id:
+                try:
+                    calendar_id = int(calendar_id)
+                except (TypeError, ValueError):
+                    calendar_id = None
+            if calendar_id:
+                cur.execute("SELECT id, brand_id, status, task_id FROM content_calendar WHERE id=%s FOR UPDATE", (calendar_id,))
+                calendar = cur.fetchone()
+                if calendar and calendar.get("brand_id") == item["brand_id"]:
+                    if calendar.get("status") == "cancelled" and calendar.get("task_id"):
+                        return _error("The linked calendar item already has research; schedule its existing workflow instead", 409)
+                    if calendar.get("task_id"):
+                        if calendar.get("status") != "research_queued":
+                            return _error("The linked calendar item is not in a schedulable state", 409)
+                        cur.execute("UPDATE content_calendar SET planned_date=%s, updated_at=now() WHERE id=%s AND status='research_queued'", (planned_date, calendar_id))
+                    else:
+                        if calendar.get("status") not in {"planned", "cancelled"}:
+                            return _error("The linked calendar item is not in a schedulable state", 409)
+                        cur.execute("UPDATE content_calendar SET planned_date=%s, status='planned', updated_at=now() WHERE id=%s AND status IN ('planned','cancelled')", (planned_date, calendar_id))
+                    if getattr(cur, "rowcount", 1) != 1:
+                        conn.rollback()
+                        return _error("The linked calendar item could not be updated", 409)
+                    conn.commit()
+                    return _calendar_success({"ok": True, "calendar_id": calendar_id, "content_item_id": content_item_id, "deduplicated": True}, 200, item["brand_id"])
+            planning = structured.get("planning_context") if isinstance(structured.get("planning_context"), dict) else {}
+            audience = str(planning.get("audience") or "TrueApply users")[:1000]
+            hypothesis = str(planning.get("hypothesis") or "Schedule the existing reviewed content for a later editorial decision")[:2000]
+            metric = planning.get("success_metric") if planning.get("success_metric") in SUCCESS_METRICS else "gsc_clicks"
+            target = str(structured.get("target_keyword") or item.get("title") or "content")[:200]
+            evidence_audit_id = structured.get("evidence_audit_id")
+            if not evidence_audit_id and structured.get("research_id"):
+                cur.execute("""SELECT t.params->>'audit_id' AS audit_id
+                               FROM content_research cr JOIN tasks t ON t.id=cr.task_id
+                               WHERE cr.id=%s""", (structured.get("research_id"),))
+                research_source = cur.fetchone()
+                if research_source and research_source.get("audit_id"):
+                    try:
+                        evidence_audit_id = int(research_source["audit_id"])
+                    except (TypeError, ValueError):
+                        evidence_audit_id = None
+            note = json.dumps({"content_item_id": content_item_id, "kind": kind, "source": "existing-content-schedule"}, separators=(",", ":"))
+            cur.execute("""INSERT INTO content_calendar
+                (brand_id,title,target_keyword,audience,hypothesis,success_metric,planned_date,competitor_urls,evidence_audit_id,evidence_note)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,'[]'::jsonb,%s,%s) RETURNING id""",
+                        (item["brand_id"], item["title"], target, audience, hypothesis, metric, planned_date, evidence_audit_id, note))
+            calendar_id = cur.fetchone()["id"]
+            structured["calendar_id"] = calendar_id
+            cur.execute("UPDATE content_items SET structured=%s::jsonb, updated_at=now() WHERE id=%s", (json.dumps(structured), content_item_id))
+            conn.commit()
+            return _calendar_success({"ok": True, "calendar_id": calendar_id, "content_item_id": content_item_id, "deduplicated": False}, 201, item["brand_id"])
+        except errors.UndefinedTable:
+            conn.rollback()
+            return _error("Content calendar is not installed", 503)
+        except (LookupError, PermissionError) as exc:
+            conn.rollback()
+            return _error(str(exc), 404 if isinstance(exc, LookupError) else 409)
+    finally:
+        conn.close()
+
+
 @content_calendar.post("/content/calendar")
 def create_calendar_plan():
     try:
@@ -419,6 +518,13 @@ def queue_calendar_research(calendar_id):
                 return _error("Calendar plan not found", 404)
             if plan.get("status") == "cancelled":
                 return _error("Cancelled plans cannot start research", 409)
+            cur.execute("""SELECT id FROM content_items
+                           WHERE brand_id=%s
+                             AND NULLIF(structured->>'calendar_id','')::int=%s
+                           LIMIT 1""", (plan["brand_id"], calendar_id))
+            if cur.fetchone():
+                conn.rollback()
+                return _error("This calendar item is already linked to existing content; research is not required", 409)
             if plan.get("task_id"):
                 conn.rollback()
                 return jsonify({"ok": True, "task_id": plan["task_id"], "deduplicated": True})
