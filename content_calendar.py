@@ -174,7 +174,7 @@ def calendar_page():
         except (TypeError, ValueError):
             return _error("brand_id must be an integer", 400)
     conn = models.db()
-    candidates, help_candidates, analysis_task = [], [], None
+    candidates, help_candidates, analysis_task, existing_content = [], [], None, []
     try:
         cur = conn.cursor()
         try:
@@ -186,6 +186,21 @@ def calendar_page():
                 (brand_filter, brand_filter),
             )
             plans = cur.fetchall()
+            if brand_filter:
+                # Load the complete linked set for publication status derivation.
+                # The selected brand's content panel is intentionally brand-only.
+                cur.execute("SELECT id, title, status, content_type, structured, updated_at FROM content_items WHERE brand_id=%s AND status IN ('outline','draft','approved','needs_publish_input','publish_failed','published') ORDER BY updated_at DESC NULLS LAST, id DESC", (brand_filter,))
+                existing_content = cur.fetchall()
+            published_calendar_ids = set()
+            for item in existing_content:
+                structured = item.get("structured") if isinstance(item.get("structured"), dict) else {}
+                calendar_id = structured.get("calendar_id")
+                item["calendar_id"] = calendar_id
+                item["content_kind"] = structured.get("content_kind") or item.get("content_type") or "article"
+                if item.get("status") == "published" and calendar_id is not None:
+                    published_calendar_ids.add(str(calendar_id))
+            for plan in plans:
+                plan["display_status"] = "published" if str(plan.get("id")) in published_calendar_ids else plan.get("status")
             cur.execute(
                 "SELECT b.id, b.name FROM brands b JOIN projects p ON p.id=b.project_id "
                 "WHERE p.lifecycle='active' ORDER BY b.name"
@@ -210,7 +225,58 @@ def calendar_page():
             candidates, help_candidates, analysis_task = [], [], None
     finally:
         conn.close()
-    return render_template("content_calendar.html", plans=plans, brands=brands, available=available, brand_filter=brand_filter, candidates=candidates, help_candidates=help_candidates, analysis_task=analysis_task)
+    return render_template("content_calendar.html", plans=plans, brands=brands, available=available, brand_filter=brand_filter, candidates=candidates, help_candidates=help_candidates, analysis_task=analysis_task, existing_content=existing_content)
+
+
+@content_calendar.post("/content/calendar/generate")
+def generate_next_outline():
+    """Force a fresh SEO measurement, then let growth_generate choose and research the next bounded topic."""
+    try:
+        brand_id = int(request.form.get("brand_id"))
+    except (TypeError, ValueError):
+        return _error("A brand is required", 400)
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        try:
+            brand = _eligible_brand(cur, brand_id, lock=True)
+            cur.execute("SELECT id, params FROM tasks WHERE type='seo_measurement' AND status IN ('queued','running') AND params->>'brand_id'=%s ORDER BY id DESC LIMIT 1", (str(brand_id),))
+            existing = cur.fetchone()
+            if existing:
+                existing_params = existing.get("params") if isinstance(existing, dict) else None
+                if isinstance(existing_params, str):
+                    try:
+                        existing_params = json.loads(existing_params)
+                    except (TypeError, ValueError):
+                        existing_params = {}
+                if isinstance(existing_params, dict) and existing_params.get("followup") == "growth_generate" and existing_params.get("queue_research") is True and existing_params.get("operator_authorized") is True:
+                    conn.rollback()
+                    return jsonify({"ok": True, "task_id": existing["id"], "deduplicated": True})
+                conn.rollback()
+                return _error("A regular SEO refresh is already running. Retry Generate fresh outline after it completes", 409)
+            cur.execute("SELECT property_type, value FROM brand_properties WHERE brand_id=%s", (brand_id,))
+            properties = {row.get("property_type"): row.get("value") for row in cur.fetchall()}
+            domain = str(properties.get("domain") or "").strip()
+            if not domain:
+                conn.rollback()
+                return _error("A domain is required before generating an outline", 409)
+            url = domain if domain.startswith(("http://", "https://")) else "https://" + domain
+            params = {"brand_id": brand_id, "project_id": brand.get("project_id"), "url": url,
+                      "source": "content-calendar", "followup": "growth_generate",
+                      "queue_research": True, "operator_authorized": True,
+                      "requires_review": True}
+            cur.execute("INSERT INTO tasks (type,status,params,triggered_by) VALUES ('seo_measurement','queued',%s,'content-calendar') RETURNING id", (json.dumps(params),))
+            task_id = cur.fetchone()["id"]
+            conn.commit()
+            return jsonify({"ok": True, "task_id": task_id, "deduplicated": False, "pipeline": "fresh-seo→growth_generate→research→outline"}), 201
+        except errors.UndefinedTable:
+            conn.rollback()
+            return _error("Growth recommendation storage is not installed", 503)
+        except (LookupError, PermissionError) as exc:
+            conn.rollback()
+            return _error(str(exc), 404 if isinstance(exc, LookupError) else 409)
+    finally:
+        conn.close()
 
 
 @content_calendar.post("/content/calendar/analyze")
