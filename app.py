@@ -15,6 +15,7 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, send_file, make_response, send_from_directory
 import markdown
 import psycopg2.extras
+from psycopg2 import errors
 
 import models
 from content_calendar import content_calendar
@@ -323,6 +324,82 @@ def _normalise_growth_report(seo_data):
     }
 
 
+def _normalise_activation_report(seo_data):
+    """Adapt the aggregate activation snapshot into a safe report contract.
+
+    The collector intentionally stores counts only.  Missing or malformed
+    snapshots remain unavailable so the dashboard cannot turn an access or
+    consent gap into a zero conversion claim.
+    """
+    unavailable = {
+        "status": "unavailable",
+        "reason": "Activation measurement is not available in the latest SEO snapshot",
+        "captured_at": None,
+        "window": {},
+        "totals": {},
+        "cohorts": [],
+        "coverage": {},
+        "signup_cohort_totals": {},
+        "health": {},
+    }
+    raw = seo_data.get("activation") if isinstance(seo_data, dict) else None
+    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+        return unavailable
+    status = raw.get("status")
+    if status not in {"available", "partial", "unavailable"}:
+        return unavailable
+    window = raw.get("window") if isinstance(raw.get("window"), dict) else {}
+    totals = raw.get("totals") if isinstance(raw.get("totals"), dict) else {}
+    coverage = raw.get("coverage") if isinstance(raw.get("coverage"), dict) else {}
+    health = raw.get("health") if isinstance(raw.get("health"), dict) else {}
+    allowed = ("signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served")
+    clean_totals = {key: _growth_number(totals.get(key)) for key in allowed}
+    if any(value is None for value in clean_totals.values()) and status == "available":
+        return unavailable
+    clean_coverage = {key: _growth_number(coverage.get(key)) for key in ("consented_signups", "unattributed_signups")}
+    cohort_totals_raw = raw.get("signup_cohort_totals") if isinstance(raw.get("signup_cohort_totals"), dict) else {}
+    cohort_keys = ("signups", "resume_processed", "profile_confirmed", "kit_started", "download_served", "kit_completed", "kit_evidence_only")
+    cohort_totals = {key: _growth_number(cohort_totals_raw.get(key)) for key in cohort_keys}
+    cohorts = []
+    for cohort in raw.get("cohorts") if isinstance(raw.get("cohorts"), list) else []:
+        if not isinstance(cohort, dict):
+            continue
+        item = {key: cohort.get(key) or "" for key in ("source", "medium", "campaign", "landing_path")}
+        for key in ("signups", "resume_processed", "profile_confirmed", "kit_started", "download_served", "kit_completed", "kit_evidence_only"):
+            item[key] = _growth_number(cohort.get(key))
+        item["consented_signups"] = _growth_number(cohort.get("consented_signups"))
+        if item["signups"] is not None:
+            cohorts.append(item)
+    return {
+        "status": status,
+        "reason": raw.get("reason"),
+        "captured_at": raw.get("captured_at") or seo_data.get("captured_at"),
+        "window": {"days": _growth_number(window.get("days")), "start": window.get("start"), "end": window.get("end")},
+        "totals": clean_totals,
+        "cohorts": cohorts[:50],
+        "coverage": clean_coverage,
+        "signup_cohort_totals": cohort_totals,
+        "health": {"last_event_at": health.get("last_event_at"), "status": health.get("status") or "unknown"},
+    }
+
+
+def _seo_cleanup_groups(findings):
+    """Group equivalent deterministic SEO findings for a reviewable batch."""
+    groups = {}
+    for finding in findings if isinstance(findings, list) else []:
+        if not isinstance(finding, dict):
+            continue
+        evidence_id = finding.get("evidence_id") or finding.get("id")
+        rule = str(finding.get("rule") or "unknown")
+        url = str(finding.get("url") or "")
+        key = (rule, url)
+        item = groups.setdefault(key, {"key": "%s|%s" % key, "rule": rule, "url": url, "finding_ids": [], "observed": finding.get("observed"), "expected": finding.get("expected"), "items": []})
+        if evidence_id is not None and evidence_id not in item["finding_ids"]:
+            item["finding_ids"].append(evidence_id)
+        item["items"].append({"evidence_id": evidence_id, "url": url, "expected": finding.get("expected"), "destination": finding.get("expected"), "precondition": {"observed": finding.get("observed")}})
+    return sorted(groups.values(), key=lambda item: (item["rule"], item["url"]))
+
+
 def _load_latest_marketing_assessment(cur, brand_id):
     """Load the latest persisted assessment without making old installs fail.
 
@@ -511,6 +588,15 @@ def brand_report(brand_id):
         audit_history = cur.fetchall()
 
         marketing_assessment, marketing_assessment_stages = _load_latest_marketing_assessment(cur, brand_id)
+        prepared_cleanup = None
+        try:
+            cur.execute("SELECT id, audit_id, plan_hash, revision, status, plan, summary, created_at, updated_at FROM seo_cleanup_batches WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1", (brand_id,))
+            prepared_cleanup = cur.fetchone()
+            if prepared_cleanup:
+                prepared_cleanup = dict(prepared_cleanup)
+                prepared_cleanup["summary"] = _parse_jsonb(prepared_cleanup.get("summary"))
+        except Exception:
+            prepared_cleanup = None
     finally:
         conn.close()
 
@@ -529,6 +615,12 @@ def brand_report(brand_id):
     if not isinstance(seo_data, dict):
         seo_data = {}
     growth_report = _normalise_growth_report(seo_data)
+    activation_report = _normalise_activation_report(seo_data)
+    if prepared_cleanup:
+        prepared_plan = _parse_jsonb(prepared_cleanup.get("plan"))
+        seo_cleanup_groups = prepared_plan.get("groups") if isinstance(prepared_plan, dict) else []
+    else:
+        seo_cleanup_groups = _seo_cleanup_groups(seo_data.get("findings"))
 
     capabilities = []
     if project_id:
@@ -663,7 +755,8 @@ def brand_report(brand_id):
                            domain=domain, competitors=competitors, audit=audit,
                            audit_summary=audit_summary, audit_sources=audit_sources,
                            seo_audit=seo_audit, seo_summary=seo_summary, seo_data=seo_data,
-                           growth_report=growth_report,
+                           growth_report=growth_report, activation_report=activation_report,
+                           seo_cleanup_groups=seo_cleanup_groups, seo_cleanup_batch=prepared_cleanup,
                            audit_history=audit_history, audit_date_fmt=audit_date_fmt,
                            suggestions=suggestions, visibility_rows=visibility_rows,
                            ch_error=ch_error, capabilities=capabilities,
@@ -679,6 +772,119 @@ def brand_report(brand_id):
                            marketing_assessment=marketing_assessment,
                            marketing_assessment_stages=marketing_assessment_stages,
                            summary_json=json.dumps(audit_summary, indent=2, default=str) if audit_summary else "")
+
+
+@app.route("/api/brands/<int:brand_id>/acquisition-activation")
+def acquisition_activation_report(brand_id):
+    """Return the latest stored aggregate activation snapshot, read-only."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, created_at, raw_data FROM audits WHERE brand_id=%s AND audit_type='seo_measurement' ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        audit = cur.fetchone()
+    finally:
+        conn.close()
+    if not audit:
+        return jsonify({"ok": True, "brand_id": brand_id, "report": _normalise_activation_report({})})
+    raw = _parse_jsonb(audit.get("raw_data"))
+    report = _normalise_activation_report(raw)
+    report["audit_id"] = audit.get("id")
+    report["audit_created_at"] = audit.get("created_at")
+    return jsonify({"ok": True, "brand_id": brand_id, "report": report})
+
+
+@app.route("/api/brands/<int:brand_id>/seo-cleanup/preview")
+def seo_cleanup_preview(brand_id):
+    """Return the worker-prepared cleanup batch, including before/after metadata."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, audit_id, plan_hash, revision, status, plan, summary, created_at, updated_at FROM seo_cleanup_batches WHERE brand_id=%s ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        batch = cur.fetchone()
+    except errors.UndefinedTable:
+        return jsonify({"ok": False, "error": "SEO cleanup workflow is not installed"}), 503
+    finally:
+        conn.close()
+    if not batch:
+        return jsonify({"ok": False, "error": "No prepared SEO cleanup plan is available. Run a fresh SEO measurement."}), 404
+    batch = dict(batch)
+    plan = _parse_jsonb(batch.get("plan"))
+    groups = plan.get("groups") if isinstance(plan, dict) else []
+    return jsonify({"ok": True, "brand_id": brand_id, "batch_id": batch.get("id"), "audit_id": batch.get("audit_id"), "plan_hash": batch.get("plan_hash"), "revision": batch.get("revision"), "status": batch.get("status"), "summary": _parse_jsonb(batch.get("summary")), "groups": groups, "created_at": batch.get("created_at"), "updated_at": batch.get("updated_at")})
+
+
+@app.route("/api/brands/<int:brand_id>/seo-cleanup/approve", methods=["POST"])
+def seo_cleanup_approve(brand_id):
+    """Approve one immutable worker-prepared cleanup plan by hash."""
+    payload = request.get_json(silent=True) or {}
+    batch_id, plan_hash = payload.get("batch_id"), payload.get("plan_hash")
+    if not batch_id or not plan_hash:
+        return jsonify({"ok": False, "error": "batch_id and plan_hash are required"}), 400
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, project_id FROM brands WHERE id=%s FOR UPDATE", (brand_id,))
+        brand = cur.fetchone()
+        if not brand:
+            return jsonify({"ok": False, "error": "Brand not found"}), 404
+        cur.execute("SELECT id, created_at FROM audits WHERE brand_id=%s AND audit_type='seo_measurement' ORDER BY created_at DESC LIMIT 1", (brand_id,))
+        latest_audit = cur.fetchone()
+        cur.execute("SELECT id, audit_id, plan_hash, status, revision, summary FROM seo_cleanup_batches WHERE id=%s AND brand_id=%s FOR UPDATE", (batch_id, brand_id))
+        batch = cur.fetchone()
+        if not batch:
+            return jsonify({"ok": False, "error": "Prepared cleanup batch not found"}), 404
+        if batch.get("plan_hash") != str(plan_hash):
+            return jsonify({"ok": False, "error": "Cleanup plan changed. Reload the latest prepared batch."}), 409
+        if latest_audit and batch.get("audit_id") != latest_audit.get("id"):
+            return jsonify({"ok": False, "error": "Cleanup plan is stale. Run or wait for the latest SEO measurement.", "latest_audit_id": latest_audit.get("id")}), 409
+        if batch.get("status") in {"verified", "cancelled"}:
+            return jsonify({"ok": False, "error": "Cleanup batch is already %s" % batch.get("status")}), 409
+        sys.path.insert(0, '/home/agency/agency-os/scripts')
+        from publication_settings import project_destination
+        destination = project_destination(brand.get("project_id"))
+        if not isinstance(destination, dict) or not destination.get("credential_path"):
+            return jsonify({"ok": False, "error": "Approved Ghost publication destination is not configured for this project"}), 409
+        cur.execute("SELECT id, status FROM tasks WHERE type='seo_cleanup' AND params->>'batch_id'=%s AND params->>'phase'='apply' ORDER BY id DESC LIMIT 1", (str(batch_id),))
+        existing = cur.fetchone()
+        if existing and existing.get("status") in {"queued", "running", "done"}:
+            return jsonify({"ok": True, "batch_id": batch_id, "task_id": existing.get("id"), "deduplicated": True, "receipt": {"status": batch.get("status"), "verification": "pending"}})
+        params = {"brand_id": brand_id, "project_id": brand.get("project_id"), "batch_id": batch_id, "approved_plan_hash": str(plan_hash), "approved": True, "phase": "apply", "destination": {key: destination.get(key) for key in ("type", "credential_path", "base_url") if destination.get(key)}}
+        cur.execute("UPDATE seo_cleanup_batches SET status='approved', updated_at=now() WHERE id=%s", (batch_id,))
+        cur.execute("INSERT INTO tasks (type,status,params,triggered_by) VALUES ('seo_cleanup','queued',%s,'dashboard-seo-cleanup-approval') RETURNING id", (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+        return jsonify({"ok": True, "batch_id": batch_id, "task_id": task_id, "deduplicated": False, "receipt": {"brand_id": brand_id, "batch_id": batch_id, "plan_hash": str(plan_hash), "revision": batch.get("revision"), "status": "approved", "verification": "pending"}}), 201
+    except errors.UndefinedTable:
+        conn.rollback()
+        return jsonify({"ok": False, "error": "SEO cleanup workflow is not installed"}), 503
+    finally:
+        conn.close()
+
+
+@app.route("/api/brands/<int:brand_id>/seo-cleanup/<int:batch_id>/notify", methods=["POST"])
+def seo_cleanup_notify_retry(brand_id, batch_id):
+    """Retry one deduplicated Discord receipt delivery for a completed batch."""
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, plan_hash, status FROM seo_cleanup_batches WHERE id=%s AND brand_id=%s", (batch_id, brand_id))
+        batch = cur.fetchone()
+        if not batch:
+            return jsonify({"ok": False, "error": "Cleanup batch not found"}), 404
+        cur.execute("SELECT id, status FROM tasks WHERE type='seo_cleanup_notify' AND params->>'batch_id'=%s AND status IN ('queued','running','done') ORDER BY id DESC LIMIT 1", (str(batch_id),))
+        existing = cur.fetchone()
+        if existing:
+            return jsonify({"ok": True, "task_id": existing.get("id"), "deduplicated": True, "batch_status": batch.get("status")})
+        params = {"brand_id": brand_id, "batch_id": batch_id, "plan_hash": batch.get("plan_hash"), "phase": "notify"}
+        cur.execute("INSERT INTO tasks (type,status,params,triggered_by) VALUES ('seo_cleanup_notify','queued',%s,'dashboard-seo-cleanup-notify') RETURNING id", (json.dumps(params),))
+        task_id = cur.fetchone()["id"]
+        conn.commit()
+        return jsonify({"ok": True, "task_id": task_id, "deduplicated": False, "batch_status": batch.get("status")}), 201
+    except errors.UndefinedTable:
+        conn.rollback()
+        return jsonify({"ok": False, "error": "SEO cleanup notification workflow is not installed"}), 503
+    finally:
+        conn.close()
 
 
 @app.route("/api/brands/<int:brand_id>/seo-measurement", methods=["POST"])
@@ -2366,6 +2572,11 @@ def suggestion_reject(sid):
 
 @app.route("/api/suggestions/<int:sid>/generate", methods=["POST"])
 def suggestion_generate(sid):
+    """Reject the legacy bypass so all content enters research and outline review."""
+    return jsonify({"ok": False, "error": "Direct draft generation is retired. Create a reviewed research plan, inspect its outline, then compose."}), 410
+
+    # Kept below for database compatibility during rolling upgrades. It is
+    # unreachable by design and can be removed after old clients are retired.
     conn = models.db()
     try:
         cur = conn.cursor()

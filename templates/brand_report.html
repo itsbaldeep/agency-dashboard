@@ -151,6 +151,68 @@
   <a class="btn btn-sm" href="/content/calendar?brand_id={{ brand.id }}">Plan content from this evidence</a>
 </div>
 
+{% if activation_report is defined %}
+<div class="report-section">
+<div class="card" id="acquisition-activation-report">
+  <div class="card-header"><span class="card-title">Acquisition &amp; activation</span><span class="badge badge-dim">aggregate, consented</span></div>
+  {% if activation_report.status == 'unavailable' %}
+    <p class="empty">{{ activation_report.reason }}</p>
+  {% else %}
+    <p class="subtle">{{ activation_report.window.start or '-' }} to {{ activation_report.window.end or '-' }}{% if activation_report.captured_at %} · captured {{ activation_report.captured_at }}{% endif %}. Counts are aggregate and may be incomplete where consent or attribution is unavailable.</p>
+    <div class="table-wrap"><table><thead><tr><th>Signups</th><th>Resume processed</th><th>Profile confirmed</th><th>Job selected</th><th>Kit completed</th><th>Evidence-only kits</th><th>Downloads served</th></tr></thead><tbody><tr>{% for key in ['signups','resume_processed','profile_confirmed','job_selected','kit_completed','kit_evidence_only','download_served'] %}<td>{{ activation_report.totals.get(key) if activation_report.totals.get(key) is not none else 'unavailable' }}</td>{% endfor %}</tr></tbody></table></div>
+    {% if activation_report.signup_cohort_totals and activation_report.signup_cohort_totals.signups is not none %}<p class="subtle mt-2">Closed signup cohort progress, measured from users who signed up in this window:</p><div class="table-wrap"><table><thead><tr><th>Signup cohort</th><th>Resume processed</th><th>Profile confirmed</th><th>Kit started</th><th>Kit completed</th><th>Evidence-only</th><th>Downloads served</th></tr></thead><tbody><tr>{% for key in ['signups','resume_processed','profile_confirmed','kit_started','kit_completed','kit_evidence_only','download_served'] %}<td>{{ activation_report.signup_cohort_totals.get(key) if activation_report.signup_cohort_totals.get(key) is not none else 'unavailable' }}</td>{% endfor %}</tr></tbody></table></div>{% endif %}
+    <p class="subtle mt-2">Consented signups: {{ activation_report.coverage.consented_signups if activation_report.coverage.consented_signups is not none else 'unavailable' }} · unattributed signups: {{ activation_report.coverage.unattributed_signups if activation_report.coverage.unattributed_signups is not none else 'unavailable' }} · event health: {{ activation_report.health.status }}</p>
+    {% if activation_report.cohorts %}<details class="mt-2"><summary>Attributed cohorts</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Medium</th><th>Campaign</th><th>Landing path</th><th>Signups</th><th>Resume</th><th>Confirmed</th><th>Started</th><th>Completed</th><th>Evidence-only</th><th>Downloads</th></tr></thead><tbody>{% for row in activation_report.cohorts %}<tr><td>{{ row.source }}</td><td>{{ row.medium }}</td><td>{{ row.campaign }}</td><td class="detail-cell">{{ row.landing_path }}</td><td>{{ row.signups }}</td><td>{{ row.resume_processed if row.resume_processed is not none else '—' }}</td><td>{{ row.profile_confirmed if row.profile_confirmed is not none else '—' }}</td><td>{{ row.kit_started if row.kit_started is not none else '—' }}</td><td>{{ row.kit_completed if row.kit_completed is not none else '—' }}</td><td>{{ row.kit_evidence_only if row.kit_evidence_only is not none else '—' }}</td><td>{{ row.download_served if row.download_served is not none else '—' }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+  {% endif %}
+  <p class="subtle mt-2"><a href="/api/brands/{{ brand.id }}/acquisition-activation">View aggregate report JSON</a>. Attribution depends on consent, browser support and configured campaign parameters.</p>
+</div>
+</div>
+{% endif %}
+
+<div class="report-section">
+<div class="card" id="seo-cleanup">
+  <div class="card-header"><span class="card-title">SEO cleanup review</span><span class="subtle">{% if seo_cleanup_batch %}batch #{{ seo_cleanup_batch.id }} · {{ seo_cleanup_batch.status }} · plan {{ seo_cleanup_batch.plan_hash[:12] }}{% else %}latest measured run{% endif %} · {{ seo_cleanup_groups|length }} grouped actions</span></div>
+  {% if seo_cleanup_batch and seo_cleanup_batch.summary %}<p class="subtle">{{ seo_cleanup_batch.summary.get('verified', 0) }} verified · {{ seo_cleanup_batch.summary.get('stale', 0) }} stale · {{ seo_cleanup_batch.summary.get('needs_review', 0) or seo_cleanup_batch.summary.get('needsreview', 0) }} needs review{% if seo_cleanup_batch.summary.get('live_write') is sameas false %} · proposal only{% endif %}</p>{% endif %}
+  {% if seo_cleanup_batch and seo_cleanup_batch.status in ['verified','failed'] %}<button class="btn btn-xs" type="button" onclick="retrySeoCleanupNotification({{ seo_cleanup_batch.id }})">Retry Discord summary</button><span id="seo-cleanup-notify-status" class="subtle ml-2" role="status"></span>{% endif %}
+  {% if seo_cleanup_groups %}
+  <p class="subtle">Review the exact findings below before queueing a tracked cleanup. The worker must verify the same run after execution.</p>
+  <div class="table-wrap"><table><thead><tr><th>Rule</th><th>URLs</th><th>Evidence</th><th>Before / proposed after</th></tr></thead><tbody>{% for group in seo_cleanup_groups %}<tr><td>{{ group.rule }}</td><td class="detail-cell">{% for item in group.items or [] %}{{ item.url }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td><td class="mono">{% for item in group.items or [] %}{{ item.evidence_id }}{% if not loop.last %}, {% endif %}{% endfor %}</td><td>{% for item in group.items or [] %}{{ item.precondition.observed or '—' }} / {{ item.expected or item.destination or 'review required' }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>{% endfor %}</tbody></table></div>
+  {% if seo_cleanup_batch and seo_cleanup_batch.status in ['proposed','failed'] %}<button class="btn btn-sm btn-primary" type="button" id="seo-cleanup-approve">Approve prepared cleanup batch</button>{% endif %}<span id="seo-cleanup-status" class="subtle ml-2" role="status"></span>
+  {% else %}<p class="empty">No measured SEO findings are available for cleanup.</p>{% endif %}
+</div>
+</div>
+
+{% if seo_cleanup_groups or seo_cleanup_batch %}<script>
+(function () {
+  var button = document.getElementById('seo-cleanup-approve');
+  if (button) button.addEventListener('click', async function () {
+    var status = document.getElementById('seo-cleanup-status');
+    button.disabled = true;
+    status.textContent = 'Preparing exact cleanup batch…';
+    try {
+      var preview = await fetch('/api/brands/{{ brand.id }}/seo-cleanup/preview');
+      var data = await preview.json();
+      if (!preview.ok || !data.ok || !data.batch_id || !data.plan_hash) throw new Error(data.error || 'No prepared cleanup plan is available');
+      var response = await fetch('/api/brands/{{ brand.id }}/seo-cleanup/approve', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({batch_id: data.batch_id, plan_hash: data.plan_hash})});
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Cleanup could not be queued');
+      status.innerHTML = 'Batch #' + result.batch_id + ' approved. <a href="/tasks/' + result.task_id + '">Task #' + result.task_id + '</a> is queued; verification receipt is pending.';
+    } catch (error) { status.textContent = error.message || 'Cleanup could not be queued'; button.disabled = false; }
+  });
+  window.retrySeoCleanupNotification = async function (batchId) {
+    var status = document.getElementById('seo-cleanup-notify-status');
+    if (!status) return;
+    status.textContent = 'Queueing summary…';
+    try {
+      var response = await fetch('/api/brands/{{ brand.id }}/seo-cleanup/' + batchId + '/notify', {method: 'POST'});
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Unable to queue summary');
+      status.textContent = 'Notification task #' + result.task_id + ' ' + (result.deduplicated ? 'already queued.' : 'queued.');
+    } catch (error) { status.textContent = error.message || 'Unable to queue summary'; }
+  };
+}());
+</script>{% endif %}
+
 <div class="report-section">
 <div class="card" id="measurement-setup">
   <div class="card-header">

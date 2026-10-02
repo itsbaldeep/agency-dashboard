@@ -11,9 +11,16 @@
 {% if not available %}
 <div class="card"><p class="empty">Content calendar is not installed yet. Apply the tracked database migration before creating plans.</p></div>
 {% else %}
+{% if brand_filter %}<div class="card mb-3">
+  <div class="card-header"><span class="card-title">Latest evidence queue</span><form method="post" action="/content/calendar/analyze" style="display:inline"><input type="hidden" name="brand_id" value="{{ brand_filter }}"><button class="btn btn-sm btn-primary" type="submit">Analyse next content action</button></form></div>
+  <p class="subtle">Candidates are ranked from the latest stored SEO and activation evidence. Keep at most three acquisition items active; help content is a separate lane. A refresh updates evidence dates and may replace stale candidates.</p>
+  {% if analysis_task %}<p class="subtle">Latest analysis task <a href="/tasks/{{ analysis_task.id }}">#{{ analysis_task.id }}</a> · {{ analysis_task.status }}</p>{% endif %}
+  <div class="table-wrap"><table><thead><tr><th>Acquisition candidates</th><th>Priority</th><th>Evidence</th><th>Action</th></tr></thead><tbody>{% for item in candidates[:3] %}<tr><td><b>{{ item.title }}</b><div class="subtle">{{ item.reason }}</div></td><td>{{ item.priority }}</td><td class="mono">{{ item.evidence_at or 'unavailable' }}</td><td><form method="post" action="/content/calendar/recommendation/{{ item.id }}/plan"><input type="date" name="planned_date" required aria-label="Schedule {{ item.title }}"><button class="btn btn-xs" type="submit">Schedule</button></form></td></tr>{% else %}<tr><td colspan="4" class="empty">No ranked acquisition candidate is available yet. Run analysis after a fresh SEO measurement.</td></tr>{% endfor %}</tbody></table></div>
+  {% if help_candidates %}<details class="mt-2"><summary>Help centre lane</summary><div class="table-wrap"><table><thead><tr><th>Suggested article</th><th>Reason</th><th>Action</th></tr></thead><tbody>{% for item in help_candidates[:3] %}<tr><td>{{ item.title }}</td><td>{{ item.reason or item.rationale or 'Product feedback evidence' }}</td><td><form method="post" action="/content/calendar/recommendation/{{ item.id }}/plan"><input type="date" name="planned_date" required aria-label="Schedule {{ item.title }}"><button class="btn btn-xs" type="submit">Schedule</button></form></td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+</div>{% endif %}
 <div class="card mb-3">
   <div class="card-title mb-2">New plan</div>
-  <form method="post" action="/content/calendar">
+  <form id="new-plan" method="post" action="/content/calendar">
     <div class="form-grid">
       <label>Brand<select name="brand_id" required><option value="">Choose a brand</option>{% for brand in brands %}<option value="{{ brand.id }}"{% if brand_filter and brand_filter|string == brand.id|string %} selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
       <label>Planned date<input type="date" name="planned_date" required></label>
