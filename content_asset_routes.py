@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from flask import Blueprint, jsonify, request
 import models
 from content_visuals import get_item, revision, error
+from script_paths import ensure_agency_scripts
 
 assets = Blueprint('content_assets', __name__)
 
@@ -69,7 +70,7 @@ def check_links(item_id):
 
 
 def module():
-    sys.path.insert(0, '/home/agency/agency-os/scripts')
+    ensure_agency_scripts()
     import content_assets
     return content_assets
 

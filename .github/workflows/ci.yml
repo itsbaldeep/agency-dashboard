@@ -10,6 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: itsbaldeep/agency-os
+          ref: 1758d1a
+          path: core/agency-os
+          sparse-checkout: scripts
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -17,3 +23,5 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python3 -m py_compile app.py
       - run: python3 -m unittest discover -s tests -p 'test_*.py'
+        env:
+          AGENCY_SCRIPT_DIR: ${{ github.workspace }}/core/agency-os/scripts

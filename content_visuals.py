@@ -6,12 +6,13 @@ import uuid
 from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request
 import models
+from script_paths import ensure_agency_scripts
 
 content_visuals = Blueprint('content_visuals', __name__)
 
 
 def visual_module():
-    sys.path.insert(0, '/home/agency/agency-os/scripts')
+    ensure_agency_scripts()
     import editorial_visuals
     return editorial_visuals
 

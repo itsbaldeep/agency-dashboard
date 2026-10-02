@@ -18,6 +18,8 @@ import psycopg2.extras
 from psycopg2 import errors
 
 import models
+from script_paths import ensure_agency_scripts
+ensure_agency_scripts()
 from content_calendar import content_calendar
 from content_visuals import content_visuals, revision as content_revision, visual_module
 from content_asset_routes import assets
@@ -839,7 +841,7 @@ def seo_cleanup_approve(brand_id):
             return jsonify({"ok": False, "error": "Cleanup plan is stale. Run or wait for the latest SEO measurement.", "latest_audit_id": latest_audit.get("id")}), 409
         if batch.get("status") in {"verified", "cancelled"}:
             return jsonify({"ok": False, "error": "Cleanup batch is already %s" % batch.get("status")}), 409
-        sys.path.insert(0, '/home/agency/agency-os/scripts')
+        ensure_agency_scripts()
         from publication_settings import project_destination
         destination = project_destination(brand.get("project_id"))
         if not isinstance(destination, dict) or not destination.get("credential_path"):
@@ -1818,7 +1820,7 @@ def _render_content_body(ci, item_id, conn, cur):
         except json.JSONDecodeError:
             blocks = None
     if isinstance(blocks, list) and blocks:
-        sys.path.insert(0, "/home/agency/agency-os/scripts")
+        ensure_agency_scripts()
         import importlib
         cp = importlib.import_module("content_pipeline")
         return banner + cp.render_pipeline_css() + \
@@ -1864,7 +1866,7 @@ def publication_context(item):
     """Describe configured capability, never mistake CMS presence for an adapter."""
     config = _parse_jsonb(item.get('publication_config'))
     config = config if isinstance(config, dict) else {}
-    sys.path.insert(0, '/home/agency/agency-os/scripts')
+    ensure_agency_scripts()
     from publication_settings import project_destination
     connection = project_destination(item.get('publication_project_id'))
     if connection:
@@ -2161,7 +2163,7 @@ def job_toggle(job_id):
 @app.route("/operations/jobs/<int:job_id>/run", methods=["POST"])
 def job_run(job_id):
     subprocess.Popen(
-        ["bash", "/home/agency/agency-os/scripts/run-job.sh", str(job_id), "manual"],
+        ["bash", os.path.join(ensure_agency_scripts(), "run-job.sh"), str(job_id), "manual"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return jsonify({"ok": True})
