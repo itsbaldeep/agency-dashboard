@@ -93,7 +93,7 @@
       <div class="mt-2 gap-2">
         <button class="btn btn-sm btn-green" onclick="approveSug({{ s.id }})">Approve</button>
         <button class="btn btn-sm btn-red" onclick="rejectSug({{ s.id }})">Reject</button>
-        <button class="btn btn-sm" onclick="generateContent({{ s.id }})">Generate Content</button>
+        <a class="btn btn-sm" href="/content/new?brand_id={{ eng.brand_id or eng.id }}&suggestion_id={{ s.id }}">Research and outline</a>
         <div id="sug-result-{{ s.id }}" class="w-full"></div>
       </div>
       {% endif %}

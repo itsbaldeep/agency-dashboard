@@ -6,6 +6,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import app as dashboard
+import content_calendar as calendar_routes
 from psycopg2 import errors
 
 
@@ -45,6 +46,8 @@ class Cursor:
             return [self.plan] if self.plan else []
         if "FROM brands" in self.sql:
             return [{"id": 1, "name": "Brand"}]
+        if "FROM brand_properties" in self.sql:
+            return [{"property_type": "domain", "value": "https://trueapply.in"}]
         return []
 
 
@@ -72,6 +75,126 @@ PLAN = {"id": 19, "brand_id": 1, "title": "Useful guide", "target_keyword": "tes
 
 
 class ContentCalendarTests(unittest.TestCase):
+    def test_growth_plan_refresh_queues_and_deduplicates(self):
+        cursor = Cursor(brand=BRAND, task=None)
+        conn = Conn(cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post("/content/calendar/analyze", data={"brand_id": "1"})
+        self.assertEqual(response.status_code, 201)
+        task_sql, task_params = next((sql, params) for sql, params in cursor.calls if "INSERT INTO tasks" in sql)
+        self.assertEqual(json.loads(task_params[0])["source"], "content-calendar")
+        self.assertEqual(conn.commits, 1)
+
+        duplicate_cursor = Cursor(brand=BRAND, task={"id": 77})
+        duplicate_conn = Conn(duplicate_cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=duplicate_conn):
+            duplicate = dashboard.app.test_client().post("/content/calendar/analyze", data={"brand_id": "1"})
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(duplicate.get_json()["deduplicated"])
+
+    def test_generate_fresh_outline_queues_measurement_with_growth_operator_contract(self):
+        cursor = Cursor(brand=BRAND, task=None)
+        conn = Conn(cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post("/content/calendar/generate", data={"brand_id": "1"})
+        self.assertEqual(response.status_code, 201)
+        task_sql, task_params = next((sql, params) for sql, params in cursor.calls if "INSERT INTO tasks" in sql)
+        queued = json.loads(task_params[0])
+        self.assertIn("seo_measurement", task_sql)
+        self.assertEqual(queued["followup"], "growth_generate")
+        self.assertTrue(queued["queue_research"])
+        self.assertTrue(queued["operator_authorized"])
+        self.assertTrue(queued["requires_review"])
+        self.assertIn("growth_generate", response.get_json()["pipeline"])
+
+    def test_generate_deduplicates_only_same_operator_contract(self):
+        same = {"id": 81, "params": {"followup": "growth_generate", "queue_research": True, "operator_authorized": True}}
+        with mock.patch.object(dashboard.models, "db", return_value=Conn(Cursor(brand=BRAND, task=same))):
+            response = dashboard.app.test_client().post("/content/calendar/generate", data={"brand_id": "1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["deduplicated"])
+
+        ordinary = {"id": 82, "params": {"followup": "growth_plan"}}
+        with mock.patch.object(dashboard.models, "db", return_value=Conn(Cursor(brand=BRAND, task=ordinary))):
+            response = dashboard.app.test_client().post("/content/calendar/generate", data={"brand_id": "1"})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("regular SEO refresh", response.get_json()["error"])
+
+    def test_calendar_renders_existing_help_content_and_published_link_status(self):
+        class CalendarCursor(Cursor):
+            def fetchall(self):
+                if "content_items" in self.sql:
+                    return [
+                        {"id": 24, "title": "How to use the kit", "status": "draft", "content_type": "article", "structured": {"content_kind": "help"}, "updated_at": "2026-10-02"},
+                        {"id": 21, "title": "Acquisition guide", "status": "outline", "content_type": "article", "structured": {"content_kind": "article", "calendar_id": 1}, "updated_at": "2026-10-01"},
+                        {"id": 22, "title": "Published guide", "status": "published", "content_type": "article", "structured": {"calendar_id": 2}, "updated_at": "2026-09-30"},
+                    ]
+                return super().fetchall()
+        plan = {**PLAN, "id": 2, "status": "research_queued"}
+        cursor = CalendarCursor(brand=BRAND, plan=plan)
+        conn = Conn(cursor)
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            with dashboard.app.test_request_context("/content/calendar?brand_id=1"):
+                html = dashboard.render_template("content_calendar.html", plans=[plan], brands=[], available=True, brand_filter=1,
+                                                  candidates=[], help_candidates=[], analysis_task=None,
+                                                  existing_content=[
+                                                      {"id": 24, "title": "How to use the kit", "status": "draft", "content_kind": "help", "updated_at": "2026-10-02"},
+                                                      {"id": 21, "title": "Acquisition guide", "status": "outline", "content_kind": "article", "updated_at": "2026-10-01"},
+                                                  ])
+        self.assertIn("How to use the kit", html)
+        self.assertIn("/content/24", html)
+        self.assertIn("Acquisition guide", html)
+
+    def test_calendar_route_keeps_existing_content_and_derives_published_status(self):
+        class CalendarCursor(Cursor):
+            def fetchall(self):
+                if "content_items" in self.sql:
+                    return [
+                        {"id": 24, "title": "How to use the kit", "status": "draft", "content_type": "article", "structured": {"content_kind": "help"}, "updated_at": "2026-10-02"},
+                        {"id": 22, "title": "Published guide", "status": "published", "content_type": "article", "structured": {"calendar_id": 2}, "updated_at": "2026-09-30"},
+                    ]
+                return super().fetchall()
+        plan = {**PLAN, "id": 2, "status": "research_queued"}
+        cursor = CalendarCursor(brand=BRAND, plan=plan)
+        captured = {}
+        def capture(template, **context):
+            captured.update(context)
+            return "rendered"
+        with mock.patch.object(dashboard.models, "db", return_value=Conn(cursor)), mock.patch.object(calendar_routes, "render_template", side_effect=capture):
+            response = dashboard.app.test_client().get("/content/calendar?brand_id=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["existing_content"][0]["content_kind"], "help")
+        self.assertEqual(captured["plans"][0]["display_status"], "published")
+
+    def test_recommendation_schedule_rejects_stale_entry(self):
+        class RecommendationCursor:
+            def execute(self, sql, params=()): self.sql = sql
+            def fetchone(self):
+                if "growth_recommendations" in self.sql:
+                    return {"id": 5, "brand_id": 1, "status": "published"}
+                return None
+        conn = Conn(RecommendationCursor())
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post("/content/calendar/recommendation/5/plan", data={"planned_date": "2026-10-10"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(conn.commits, 0)
+
+    def test_recommendation_schedule_rejects_three_active_items(self):
+        class RecommendationCursor:
+            def __init__(self): self.sql = ""
+            def execute(self, sql, params=()): self.sql = sql
+            def fetchone(self):
+                if "growth_recommendations" in self.sql:
+                    return {"id": 5, "brand_id": 1, "audit_id": 7, "kind": "article", "title": "Fresh topic", "target_keyword": "fresh topic", "rationale": "Recent evidence", "evidence": {}, "status": "suggested"}
+                if "FROM brands" in self.sql: return {"id": 1, "project_id": 2, "lifecycle": "active", "state": "live"}
+                if "FROM audits" in self.sql: return {"id": 7}
+                if "count(*) AS total" in self.sql: return {"total": 3}
+                return None
+        conn = Conn(RecommendationCursor())
+        with mock.patch.object(dashboard.models, "db", return_value=conn):
+            response = dashboard.app.test_client().post("/content/calendar/recommendation/5/plan", data={"planned_date": "2026-10-10"})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("three items", response.get_json()["error"])
     def test_create_rejects_invalid_fields_without_database(self):
         response = dashboard.app.test_client().post("/content/calendar", data={"brand_id": "1", "title": "", "success_metric": "bad"})
         self.assertEqual(response.status_code, 400)
