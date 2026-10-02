@@ -142,7 +142,7 @@ def _calendar_success(payload, status, brand_id):
 
 def _active_content_count(cur, brand_id, kind=None):
     """Count active plans without counting a calendar plan and its linked outline twice."""
-    calendar_kind = "" if kind not in {"help", "article"} else (" AND " + ("cc.evidence_note LIKE '%%\"kind\":\"help\"%%'" if kind == "help" else "cc.evidence_note NOT LIKE '%%\"kind\":\"help\"%%'"))
+    calendar_kind = "" if kind not in {"help", "article"} else (" AND " + ("cc.evidence_note ~ '\"kind\"\\s*:\\s*\"help\"'" if kind == "help" else "cc.evidence_note !~ '\"kind\"\\s*:\\s*\"help\"'"))
     item_kind = "" if kind not in {"help", "article"} else (" AND COALESCE(ci.structured->>'content_kind', ci.content_type, 'article')=%s")
     params = [brand_id]
     if calendar_kind and kind == "help": pass
@@ -155,6 +155,7 @@ def _active_content_count(cur, brand_id, kind=None):
             SELECT 1 FROM content_items linked
             WHERE linked.brand_id=cc.brand_id
               AND NULLIF(linked.structured->>'calendar_id','')::int=cc.id
+              AND linked.status NOT IN ('outline','draft','approved','needs_publish_input','publish_failed')
           )
         UNION ALL SELECT ci.id FROM content_items ci WHERE ci.brand_id=%s AND ci.status IN ('outline','draft','approved','needs_publish_input','publish_failed')""" + item_kind + """
           AND NOT EXISTS (
