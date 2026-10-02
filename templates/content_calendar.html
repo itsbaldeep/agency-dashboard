@@ -54,7 +54,7 @@
 </div>
 {% if brand_filter %}<div class="card mt-3">
   <div class="card-header"><span class="card-title">Existing content queue</span><span class="subtle">{{ existing_content|length }} shown</span></div>
-  {% if existing_content %}<div class="table-wrap"><table><thead><tr><th>Content</th><th>Lane</th><th>Status</th><th>Updated</th></tr></thead><tbody>{% for item in existing_content %}<tr><td><a href="/content/{{ item.id }}">{{ item.title }}</a></td><td>{{ item.content_kind }}</td><td><span class="badge badge-dim">{{ item.status }}</span></td><td class="mono">{{ item.updated_at or '-' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="empty">No outlines or drafts are currently recorded for this brand.</p>{% endif %}
+  {% if existing_content %}<div class="table-wrap"><table><thead><tr><th>Content</th><th>Lane</th><th>Status</th><th>Updated</th><th>Planning date</th></tr></thead><tbody>{% for item in existing_content %}<tr><td><a href="/content/{{ item.id }}">{{ item.title }}</a></td><td>{{ item.content_kind }}</td><td><span class="badge badge-dim">{{ item.status }}</span></td><td class="mono">{{ item.updated_at or '-' }}</td><td>{% if item.status in ['outline','draft','approved','needs_publish_input','publish_failed'] %}<form method="post" action="/content/calendar/content/{{ item.id }}/schedule"><input type="date" name="planned_date" required aria-label="Schedule {{ item.title }}"><button class="btn btn-xs" type="submit">Schedule</button></form>{% else %}—{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="empty">No outlines or drafts are currently recorded for this brand.</p>{% endif %}
 </div>
 {% endif %}
 {% endif %}
@@ -66,7 +66,7 @@ document.querySelectorAll('form[action^="/content/calendar"]').forEach(function(
     const message = document.getElementById('calendar-message');
     button.disabled = true;
     try {
-      const response = await fetch(form.action, {method: 'POST', body: new FormData(form)});
+      const response = await fetch(form.action, {method: 'POST', headers: {'Accept': 'application/json'}, body: new FormData(form)});
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || 'Request failed');
       window.location.reload();
