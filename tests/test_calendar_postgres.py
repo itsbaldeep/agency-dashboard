@@ -1,5 +1,6 @@
 """Opt-in real SQL contract test. All fixtures and queued tasks are temporary."""
 import os
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -90,6 +91,25 @@ class CalendarPostgresTests(unittest.TestCase):
                 self.assertTrue(repeated_schedule.json["deduplicated"])
                 cur.execute("SELECT count(*) FROM content_calendar WHERE id=%s", (calendar_id,))
                 self.assertEqual(cur.fetchone()[0], 1)
+
+                def add_linked(item_id, title, kind, status="outline"):
+                    cur.execute("""INSERT INTO content_calendar
+                        (brand_id,title,target_keyword,audience,hypothesis,success_metric,planned_date,competitor_urls,evidence_note)
+                        VALUES (1,%s,%s,'Audience','Hypothesis','gsc_clicks','2026-10-10','[]'::jsonb,%s)
+                        RETURNING id""", (title, title.lower().replace(" ", "-"), json.dumps({"kind": kind})))
+                    linked_calendar_id = cur.fetchone()[0]
+                    cur.execute("INSERT INTO content_items(id,brand_id,title,content_type,status,structured) VALUES (%s,1,%s,%s,%s,%s::jsonb)",
+                                (item_id, title, "article", status, json.dumps({"content_kind": kind, "calendar_id": linked_calendar_id})))
+
+                add_linked(21, "Existing article", "article")
+                add_linked(24, "Help one", "help")
+                add_linked(25, "Help two", "help")
+                add_linked(26, "Help three", "help")
+                add_linked(90, "Published article", "article", status="published")
+                from content_calendar import _active_content_count
+                count_cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                self.assertEqual(_active_content_count(count_cur, 1, "article"), 3)
+                self.assertEqual(_active_content_count(count_cur, 1, "help"), 3)
         finally:
             conn.rollback()
             conn.close()
