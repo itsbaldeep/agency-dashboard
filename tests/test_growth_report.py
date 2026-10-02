@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 import importlib.util
@@ -156,7 +157,7 @@ class GrowthReportTests(unittest.TestCase):
         self.assertEqual(report["retention"]["status"], "unavailable")
 
     def test_core_collector_contract_reaches_dashboard_without_evidence_loss(self):
-        scripts = Path("/home/agency/core/agency-os/scripts")
+        scripts = Path(os.environ.get("AGENCY_SCRIPT_DIR", "/home/agency/core/agency-os/scripts"))
         sys.path.insert(0, str(scripts))
         try:
             spec = importlib.util.spec_from_file_location("seo_measurement_contract", scripts / "seo_measurement.py")
