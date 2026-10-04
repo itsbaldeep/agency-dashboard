@@ -23,14 +23,33 @@ ensure_agency_scripts()
 from content_calendar import content_calendar
 from content_visuals import content_visuals, revision as content_revision, visual_module
 from content_asset_routes import assets
+from marketing_workspace import marketing, portfolio_rows
+from marketing_connections import connections
 
 app = Flask(__name__)
 app.register_blueprint(content_calendar)
 app.register_blueprint(content_visuals)
 app.register_blueprint(assets)
+app.register_blueprint(marketing)
+app.register_blueprint(connections)
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]
+
+@app.before_request
+def protect_dashboard_writes():
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and request.headers.get('Origin') != request.host_url.rstrip('/'):
+        return jsonify(ok=False, error='Cross-site write rejected; same-origin header required'), 403
+
+
+@app.before_request
+def retire_dashboard_coding():
+    """Coding and repository actions belong in Codex, outside marketing delivery."""
+    if (request.path == '/dev-tasks' or request.path.startswith('/api/dev-tasks/')
+            or (request.method == 'POST' and request.path.startswith('/api/design/'))
+            or request.path == '/projects/onboard'
+            or (request.path.startswith('/projects/') and request.path.endswith('/fix'))):
+        return jsonify(ok=False,error='Development workflows have moved to Codex. Use the brand workspace for marketing.'),410
 
 
 @app.context_processor
@@ -39,7 +58,7 @@ def operator_context():
     first = request.path.strip("/").split("/", 1)[0] or "dashboard"
     return {
         "nav_alert_count": models.get_alert_nav_count(),
-        "active": "dashboard" if first == "dashboard" else first,
+        "active": "calendar" if request.path.startswith('/content/calendar') else ("dashboard" if first == "dashboard" else first),
     }
 
 @app.template_filter('jsonloads')
@@ -112,7 +131,7 @@ def filesize(value):
 @app.route("/")
 @app.route("/dashboard")
 def dashboard():
-    return render_template("dashboard.html")
+    return render_template("marketing_portfolio.html", brands=portfolio_rows(), portfolio=True)
 
 
 @app.route("/dashboard/data")
@@ -346,6 +365,17 @@ def _normalise_activation_report(seo_data):
         "retention": {"status": "unavailable", "counts": {}, "email_status": "unavailable"},
     }
     raw = seo_data.get("activation") if isinstance(seo_data, dict) else None
+    if isinstance(raw,dict) and raw.get('schema_version') == 2:
+        stages=raw.get('stage_totals') if isinstance(raw.get('stage_totals'),dict) else {}
+        clean={key:value for key,value in list(stages.items())[:30]
+               if isinstance(key,str) and re.fullmatch(r'[a-z][a-z0-9_]{0,63}',key)
+               and type(value)==int and 0<=value<=10**12}
+        if not clean:return unavailable
+        return {'status':raw.get('status','unavailable'),'schema_version':2,
+                'stage_totals':clean,'stage_labels':raw.get('stage_labels',{}),
+                'totals':clean,'window':raw.get('window',{}),'captured_at':seo_data.get('captured_at'),
+                'retention':raw.get('retention',{'status':'unavailable','counts':{}}),
+                'cohorts':[],'coverage':{},'signup_cohort_totals':{},'health':raw.get('health',{})}
     if not isinstance(raw, dict) or raw.get("schema_version") != 1:
         return unavailable
     status = raw.get("status")
@@ -913,17 +943,15 @@ def enqueue_seo_measurement(brand_id):
         if not brand:
             return jsonify({"ok": False, "error": "Brand not found"}), 404
         project_id = brand.get("project_id")
-        if not project_id:
-            return jsonify({"ok": False, "error": "Brand has no project"}), 400
-
-        cur.execute("SELECT id, lifecycle, state FROM projects WHERE id=%s", (project_id,))
-        project = cur.fetchone()
-        if not project:
-            return jsonify({"ok": False, "error": "Project not found"}), 400
-        if project.get("lifecycle") != "active":
-            return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
-        if project.get("state") not in {"scaffolded", "building", "preview", "staged", "live"}:
-            return jsonify({"ok": False, "error": "Project is not eligible for measurement"}), 409
+        if project_id:
+            cur.execute("SELECT id, lifecycle, state FROM projects WHERE id=%s", (project_id,))
+            project = cur.fetchone()
+            if not project:
+                return jsonify({"ok": False, "error": "Project not found"}), 400
+            if project.get("lifecycle") != "active":
+                return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
+            if project.get("state") not in {"scaffolded", "building", "preview", "staged", "live"}:
+                return jsonify({"ok": False, "error": "Project is not eligible for measurement"}), 409
 
         cur.execute("SELECT property_type, value FROM brand_properties WHERE brand_id=%s", (brand_id,))
         properties = {p.get("property_type"): p.get("value") for p in cur.fetchall()}
@@ -996,12 +1024,11 @@ def save_measurement_setup(brand_id):
         brand = cur.fetchone()
         if not brand:
             return jsonify({"ok": False, "error": "Brand not found"}), 404
-        if not brand.get("project_id"):
-            return jsonify({"ok": False, "error": "Brand has no linked project"}), 400
-        cur.execute("SELECT lifecycle FROM projects WHERE id=%s", (brand["project_id"],))
-        project = cur.fetchone()
-        if not project or project.get("lifecycle") != "active":
-            return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
+        if brand.get("project_id"):
+            cur.execute("SELECT lifecycle FROM projects WHERE id=%s", (brand["project_id"],))
+            project = cur.fetchone()
+            if not project or project.get("lifecycle") != "active":
+                return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
         _upsert_brand_property(cur, brand_id, "gsc_property", gsc_value)
         _upsert_brand_property(cur, brand_id, "ga4_property_id", ga4_value)
         _upsert_brand_property(cur, brand_id, "ga4_measurement_id", measurement_value)
@@ -1097,6 +1124,8 @@ def onboard_client():
 
     if not ctype or ctype not in ("marketing_only", "existing_code_marketing", "clean_slate"):
         return jsonify({"ok": False, "error": "valid type required"}), 400
+    if ctype != "marketing_only":
+        return jsonify({"ok": False, "error": "Coding and project creation onboarding has moved to Codex. Use marketing_only for dashboard intake."}), 410
     if not user_input:
         return jsonify({"ok": False, "error": "input required"}), 400
 
@@ -1894,9 +1923,13 @@ def publication_context(item):
         ready = bool(config.get('type') == 'ghost' and config.get('enabled'))
         message = ('Publishes this reviewed draft to the project’s Ghost blog. No email or newsletter will be sent.' if ready else
                    'This project uses Ghost. Its publishing connection is not enabled yet. You can export the draft for manual review in the blog editor.')
+    elif driver == 'static':
+        ready = bool(config.get('enabled') and config.get('output_root') and str(config.get('base_url','')).startswith('https://'))
+        name = 'Static blog'
+        message = 'Publishes the exact reviewed article to the brand-owned blog, with an ownership receipt and recoverable archive. No email is sent.' if ready else 'The static blog destination is not enabled.'
     elif ready:
         message = 'Uses the project’s saved publishing connection. Confirm only when this draft is ready to go public.'
-    if ready and driver != 'ghost' and any(isinstance(b, dict) and b.get('type') == 'editorial_visual' for b in item.get('content_blocks') or []):
+    if ready and driver not in ('ghost','static') and any(isinstance(b, dict) and b.get('type') == 'editorial_visual' for b in item.get('content_blocks') or []):
         ready = False
         message = 'The current publishing adapter cannot preserve this draft’s visuals. Export HTML for review; dashboard publication is blocked to avoid losing them.'
     return {'name': name, 'ready': ready, 'message': message,
@@ -2041,7 +2074,7 @@ def content_approve(ci_id):
             return jsonify(ok=False, error=context['message']), 409
         approved_digest = None
         approved_destination = None
-        if context['name'] == 'Ghost':
+        if context['name'] in ('Ghost','Static blog'):
             if payload.get('revision') != content_revision(item):
                 return jsonify(ok=False, error='This draft changed. Reload the preview and review it before publishing.'), 409
             from ghost_publisher import content_digest

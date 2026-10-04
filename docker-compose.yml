@@ -15,6 +15,7 @@ services:
       - /home/agency/agency-os/caddy-apps:/caddy-apps:ro
       - /home/agency/agency-os/scripts:/home/agency/agency-os/scripts:ro
       - /home/agency/agency-os/config:/agency-config:ro
+      - /home/agency/.local/share/agency-marketing:/home/agency/.local/share/agency-marketing
     environment:
       DB_HOST: agency-postgres
       DB_NAME: agencyos

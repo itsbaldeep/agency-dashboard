@@ -1,3 +1,4 @@
+from browser_client import browser_client
 import os
 import sys
 import unittest
@@ -238,7 +239,7 @@ class GrowthReportTests(unittest.TestCase):
             cursor, conn = Cursor(), None
             conn = Conn(cursor)
             with mock.patch.object(dashboard.models, 'db', return_value=conn):
-                response = dashboard.app.test_client().post('/api/brands/31/seo-cleanup/approve', json={'batch_id': 4, 'plan_hash': 'hash-1'})
+                response = browser_client(dashboard.app).post('/api/brands/31/seo-cleanup/approve', json={'batch_id': 4, 'plan_hash': 'hash-1'})
             self.assertEqual(response.status_code, 201)
             body = response.get_json()
             self.assertEqual(body['task_id'], 88)
@@ -249,12 +250,12 @@ class GrowthReportTests(unittest.TestCase):
             stale_cursor, stale_conn = Cursor(stale=True), None
             stale_conn = Conn(stale_cursor)
             with mock.patch.object(dashboard.models, 'db', return_value=stale_conn):
-                stale = dashboard.app.test_client().post('/api/brands/31/seo-cleanup/approve', json={'batch_id': 4, 'plan_hash': 'hash-1'})
+                stale = browser_client(dashboard.app).post('/api/brands/31/seo-cleanup/approve', json={'batch_id': 4, 'plan_hash': 'hash-1'})
             self.assertEqual(stale.status_code, 409)
             self.assertEqual(stale_conn.commits, 0)
 
     def test_legacy_direct_generation_is_retired(self):
-        response = dashboard.app.test_client().post('/api/suggestions/17/generate')
+        response = browser_client(dashboard.app).post('/api/suggestions/17/generate')
         self.assertEqual(response.status_code, 410)
         self.assertIn('research plan', response.get_json()['error'])
 
