@@ -118,7 +118,7 @@ def portfolio_rows():
 
 @marketing.route('/brands')
 def brands():
-    return render_template('marketing_portfolio.html', brands=portfolio_rows(), portfolio=False)
+    return redirect('/dashboard', code=302)
 
 @marketing.route('/reports')
 def reports():

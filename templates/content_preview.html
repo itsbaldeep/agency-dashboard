@@ -9,6 +9,7 @@
     {% if updated_fmt %}<span class="content-actionbar-date subtle">{{ updated_fmt }}</span>{% endif %}
   </div>
   <div class="content-actionbar-actions gap-2">
+    {% if ci.status=='published' and publication.name=='Static blog' %}<button class="btn btn-sm" onclick="reviewWithdrawal()">Withdraw article</button>{% endif %}
     {% if published_url %}<a class="btn btn-green" href="{{ published_url }}" target="_blank" rel="noopener noreferrer">View published article</a>{% endif %}
     {% if ci.body or ci.content_blocks %}
     <a href="/content/{{ ci.id }}/download" class="btn btn-sm">Download</a>
@@ -53,6 +54,14 @@
   {{ body_html|safe }}
 </div>
 
+{% if ci.status=='published' and publication.name=='Static blog' %}
+<dialog id="withdrawDialog" class="workflow-dialog" aria-labelledby="withdrawHeading"><form method="dialog"><h3 id="withdrawHeading">Withdraw this published article?</h3><p id="withdrawDescription"></p><p>The original is archived privately. You can revise the draft and approve a new publication separately.</p><div id="withdrawError" role="alert"></div><div class="workspace-actions mt-2"><button class="btn" value="cancel">Cancel</button><button type="button" class="btn btn-primary" onclick="confirmWithdrawal()">Approve withdrawal</button></div></form></dialog>
+<script>
+let withdrawalReview=null;
+const withdrawalUrl='/api/brands/{{ci.brand_id}}/content/{{ci.id}}/withdraw';
+async function reviewWithdrawal(){const dialog=document.getElementById('withdrawDialog');dialog.showModal();try{const r=await fetch(withdrawalUrl);const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error);withdrawalReview=d.review;document.getElementById('withdrawDescription').textContent=d.url+' · '+d.effect;}catch(e){document.getElementById('withdrawError').textContent=e.message;}}
+async function confirmWithdrawal(){if(!withdrawalReview)return;try{const r=await fetch(withdrawalUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(withdrawalReview)});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error);location.href='/tasks/'+d.task_id;}catch(e){document.getElementById('withdrawError').textContent=e.message;}}
+</script>{% endif %}
 <dialog id="publishDialog" class="workflow-dialog" aria-labelledby="publishHeading">
   <form method="dialog" id="publishForm">
     <h3 id="publishHeading">{{ 'Publish this article?' if publication.ready else 'Publishing connection needed' }}</h3>

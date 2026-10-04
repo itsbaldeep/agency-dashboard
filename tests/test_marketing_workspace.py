@@ -101,6 +101,13 @@ class MarketingWorkspaceRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 410)
         db.assert_not_called()
 
+    def test_brand_listing_redirects_to_single_portfolio(self):
+        with mock.patch.object(dashboard.models,'db') as db:
+            response=self.client.get('/brands')
+        self.assertEqual(response.status_code,302)
+        self.assertEqual(response.headers['Location'],'/dashboard')
+        db.assert_not_called()
+
     def test_workspace_exposes_exactly_the_seven_supported_tabs(self):
         import marketing_workspace
         self.assertEqual(

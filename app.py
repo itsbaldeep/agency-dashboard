@@ -25,6 +25,7 @@ from content_visuals import content_visuals, revision as content_revision, visua
 from content_asset_routes import assets
 from marketing_workspace import marketing, portfolio_rows
 from marketing_connections import connections
+from publication_recovery_routes import recovery
 
 app = Flask(__name__)
 app.register_blueprint(content_calendar)
@@ -32,6 +33,7 @@ app.register_blueprint(content_visuals)
 app.register_blueprint(assets)
 app.register_blueprint(marketing)
 app.register_blueprint(connections)
+app.register_blueprint(recovery)
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]

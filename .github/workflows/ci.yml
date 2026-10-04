@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: itsbaldeep/agency-os
-          ref: 12351017883781af7839e501830f699b0b0495e9
+          ref: 1c31c9723a96441a1d4019a0701bc15c51961ef4
           path: core/agency-os
           sparse-checkout: scripts
       - uses: actions/setup-python@v5

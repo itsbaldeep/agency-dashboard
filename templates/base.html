@@ -19,11 +19,8 @@
   </div>
   <div class="sidebar-nav">
     <div class="sidebar-section">Workspace</div>
-    <a href="/dashboard" class="{% if active == 'dashboard' %}active{% endif %}">
+    <a href="/dashboard" class="{% if active in ['dashboard','brands','engagements'] %}active{% endif %}">
       <span class="nav-icon" aria-hidden="true">&#9632;</span> Portfolio
-    </a>
-    <a href="/brands" class="{% if active in ['brands', 'engagements'] %}active{% endif %}">
-      <span class="nav-icon" aria-hidden="true">&#9670;</span> Brands
     </a>
     <a href="/content" class="{% if active == 'content' %}active{% endif %}">
       <span class="nav-icon" aria-hidden="true">&#9998;</span> Editorial

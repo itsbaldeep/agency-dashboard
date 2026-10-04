@@ -1,5 +1,5 @@
 {% extends 'base.html' %}{% block content %}
-<div class="workspace-back"><a href="/brands">Brands</a> / {{brand.name}}</div>
+<div class="workspace-back"><a href="/dashboard">Portfolio</a> / {{brand.name}}</div>
 <div class="page-header workspace-header"><div><div class="eyebrow">BRAND WORKSPACE</div><h1>{{brand.name}}</h1><div class="sub">{{profile.positioning or 'Set the brand brief to guide every marketing task.'}}</div></div><div class="workspace-actions"><button class="btn btn-primary" onclick="queueMeasurement()">Refresh measurement</button><a class="btn" href="/engagements/brand/{{brand.id}}/report">Full evidence report</a></div></div>
 <nav class="workspace-tabs" aria-label="Brand workspace">{% for t in tabs %}<a href="/brands/{{brand.id}}/{{t}}" class="{{'active' if t==tab}}" {% if t==tab %}aria-current="page"{% endif %}>{{ {'overview':'Overview','strategy':'Strategy & GTM','measurement':'Measurement','editorial':'Editorial','social':'Social & video','lifecycle':'Lifecycle','setup':'Setup'}[t] }}</a>{% endfor %}</nav>
 <div id="workspace-status" role="status" class="subtle mb-2"></div>
