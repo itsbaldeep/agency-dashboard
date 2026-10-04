@@ -28,6 +28,7 @@ from marketing_connections import connections
 from publication_recovery_routes import recovery
 from campaign_routes import campaigns
 from email_provider_routes import email_provider
+from campaign_execution_routes import campaign_execution
 
 app = Flask(__name__)
 app.register_blueprint(content_calendar)
@@ -38,6 +39,7 @@ app.register_blueprint(connections)
 app.register_blueprint(recovery)
 app.register_blueprint(campaigns)
 app.register_blueprint(email_provider)
+app.register_blueprint(campaign_execution)
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]
