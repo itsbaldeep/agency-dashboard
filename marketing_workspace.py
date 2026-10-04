@@ -415,16 +415,45 @@ def upload_ui_asset(brand_id,item_id):
 
 @marketing.route('/calendar')
 def marketing_calendar():
+    raw_brand = request.args.get('brand_id')
+    if raw_brand is None or raw_brand == '':
+        brand_filter = None
+    elif raw_brand.isascii() and raw_brand.isdigit() and len(raw_brand) <= 10 and 0 < int(raw_brand) <= 2147483647:
+        brand_filter = int(raw_brand)
+    else:
+        return jsonify(ok=False, error='brand_id must be a positive integer'), 400
     conn=models.db()
     try:
         cur=conn.cursor()
-        cur.execute('''SELECT m.id,m.brand_id,b.name AS brand_name,m.title,m.kind,m.channel,m.state AS status,m.planned_at::date AS planned_date,
+        cur.execute('SELECT id,name FROM brands ORDER BY name,id LIMIT 250')
+        brands = cur.fetchall()
+        plan_where = "WHERE m.state<>'archived' AND m.planned_at IS NOT NULL"
+        plan_args = []
+        if brand_filter is not None:
+            plan_where += ' AND m.brand_id=%s'; plan_args.append(brand_filter)
+        cur.execute('''SELECT m.id,m.brand_id,b.name AS brand_name,m.title,m.kind,m.channel,m.state AS status,m.planned_at AS planned_at,
             '/brands/'||m.brand_id||'/work/'||m.id AS url FROM marketing_work_items m JOIN brands b ON b.id=m.brand_id
-            WHERE m.state<>'archived' AND m.planned_at IS NOT NULL
-            UNION ALL SELECT c.id,c.brand_id,b.name,c.title,'editorial','blog',c.status,c.planned_date,
-            '/content/calendar?brand_id='||c.brand_id FROM content_calendar c JOIN brands b ON b.id=c.brand_id WHERE c.status<>'cancelled'
-            ORDER BY planned_date,brand_name,title LIMIT 250''')
-        return render_template('marketing_calendar.html',plans=cur.fetchall())
+            ''' + plan_where + '''
+            UNION ALL SELECT c.id,c.brand_id,b.name,c.title,'editorial','blog',c.status,c.planned_date::timestamptz,
+            '/content/calendar?brand_id='||c.brand_id FROM content_calendar c JOIN brands b ON b.id=c.brand_id
+            WHERE c.status<>'cancelled' ''' + (' AND c.brand_id=%s' if brand_filter is not None else '') + '''
+            ORDER BY planned_at,brand_name,title LIMIT 250''', tuple(plan_args + plan_args))
+        plans = cur.fetchall()
+        run_where = 'WHERE 1=1'
+        run_args = []
+        if brand_filter is not None:
+            run_where += ' AND r.brand_id=%s'; run_args.append(brand_filter)
+        cur.execute('''SELECT r.id,r.brand_id,b.name AS brand_name,r.item_id,r.revision,r.send_at,r.state,
+            wi.title AS title
+            FROM marketing_campaign_runs r JOIN brands b ON b.id=r.brand_id
+            JOIN marketing_work_items wi ON wi.id=r.item_id AND wi.brand_id=r.brand_id
+            ''' + run_where + ''' ORDER BY r.send_at,r.id LIMIT 250''', tuple(run_args))
+        runs = cur.fetchall()
+        for row in plans:
+            if row.get('planned_at'): row['planned_at'] = row['planned_at'].isoformat()
+        for row in runs:
+            if row.get('send_at'): row['send_at'] = row['send_at'].astimezone(timezone.utc).isoformat()
+        return render_template('marketing_calendar.html', plans=plans, runs=runs, brands=brands, brand_filter=brand_filter)
     finally:conn.close()
 
 @marketing.route('/api/brands/<int:brand_id>/measurement-schedule',methods=['POST'])
