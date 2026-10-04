@@ -1,0 +1,21 @@
+<div class="card">
+  <div class="card-title">Campaign rules</div>
+  <p class="subtle mt-2">Set when this message is appropriate. Recipient consent and suppression stay with the brand and must be checked again before delivery.</p>
+  <form id="campaign-policy" class="form-grid mt-2">
+    <label>Message category<select name="category"><option value="marketing">Marketing</option><option value="transactional">Transactional service event</option></select></label>
+    <label>Lifecycle play<select name="play"><option value="inactivity">Inactivity recovery</option><option value="welcome">Welcome</option><option value="product_update">Product update</option><option value="service_event">Service event</option></select></label>
+    <label>Inactive days<input name="inactivity_days" type="number" min="0" max="365" required></label>
+    <label>Minimum hours between messages<input name="cooldown_hours" type="number" min="24" max="8760" required></label>
+    <label>Maximum messages in seven days<input name="max_per_7_days" type="number" min="1" max="7" required></label>
+    <label>Audience timezone<input name="timezone" placeholder="Asia/Kolkata" required maxlength="80"></label>
+    <label>Quiet hours start<input name="quiet_start" type="time" required></label>
+    <label>Quiet hours end<input name="quiet_end" type="time" required></label>
+    <label class="full-width">Exact service event (transactional only)<input name="service_event" maxlength="120" placeholder="invoice.ready"></label>
+    <div class="full-width"><button class="btn btn-primary" type="submit" disabled>Save campaign rules</button></div>
+  </form>
+  <div class="card-title mt-2">Delivery readiness</div>
+  <ul id="campaign-blockers" class="subtle"><li>Checking this draft.</li></ul>
+  <p class="subtle">A planning date does not schedule delivery. Saving rules returns this item to draft for review.</p>
+  <div id="campaign-policy-status" class="subtle" role="status"></div>
+</div>
+<script src="/static/campaign.js" defer></script>
