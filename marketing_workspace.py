@@ -450,9 +450,9 @@ def marketing_calendar():
             ''' + run_where + ''' ORDER BY r.send_at,r.id LIMIT 250''', tuple(run_args))
         runs = cur.fetchall()
         for row in plans:
-            if row.get('planned_at'): row['planned_at'] = row['planned_at'].isoformat()
+            if row.get('planned_at'): row['planned_at'] = row['planned_at'].astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M')
         for row in runs:
-            if row.get('send_at'): row['send_at'] = row['send_at'].astimezone(timezone.utc).isoformat()
+            if row.get('send_at'): row['send_at'] = row['send_at'].astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
         return render_template('marketing_calendar.html', plans=plans, runs=runs, brands=brands, brand_filter=brand_filter)
     finally:conn.close()
 
