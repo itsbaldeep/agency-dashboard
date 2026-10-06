@@ -164,11 +164,14 @@ def workspace(brand_id, tab='overview'):
     growth_report = _normalise_growth_report(evidence)
     activation = _normalise_activation_report(evidence)
     sources = evidence.get('sources') if isinstance(evidence.get('sources'), dict) else {}
+    from core_enquiries import configured_for_brand
+    enquiry_source_configured = configured_for_brand(brand['id'], brand.get('project_id'))
     return render_template('marketing_workspace.html', brand=brand, profile=profile,
         profile_revision=saved.get('revision', 0), properties=properties, tab=tab, tabs=TABS,
         items=items, audits=audits, content_items=content, suggestions=suggestions, tasks=tasks,
         seo=seo, evidence=evidence, sources=sources, growth_report=growth_report,
-        activation_report=activation, plays=domain_module().GTM_PLAYBOOKS, channels=channels, schedule_enabled=schedule_enabled)
+        activation_report=activation, plays=domain_module().GTM_PLAYBOOKS, channels=channels,
+        schedule_enabled=schedule_enabled, enquiry_source_configured=enquiry_source_configured)
 
 @marketing.route('/api/brands/<int:brand_id>/profile', methods=['POST'])
 def profile_save(brand_id):

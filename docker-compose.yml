@@ -16,6 +16,7 @@ services:
       - /home/agency/agency-os/scripts:/home/agency/agency-os/scripts:ro
       - /home/agency/agency-os/config:/agency-config:ro
       - /home/agency/.local/share/agency-marketing:/home/agency/.local/share/agency-marketing
+      - /home/agency/core/deployden/data:/agency-enquiries/27:ro
     environment:
       DB_HOST: agency-postgres
       DB_NAME: agencyos
@@ -31,6 +32,7 @@ services:
       AGENCY_S3_BUCKET: agency-editorial
       AGENCY_S3_PUBLIC_BASE: https://assets.apps.deployden.tech
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      AGENCY_CORE_ENQUIRY_OWNERS: "27:10"
     env_file:
       - /home/agency/.config/agency/assets.env
 

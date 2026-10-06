@@ -116,3 +116,12 @@ input, select, textarea { padding: 6px 8px; font-size: 12px; }
 
 .marketing-calendar-table{min-width:760px}
 .marketing-calendar-table .mono{white-space:nowrap}
+.enquiry-table{min-width:860px;table-layout:fixed}
+@media(min-width:768px){.enquiry-header .workspace-actions{margin-right:42px}}
+.enquiry-table th:first-child{width:50px}
+.enquiry-table th:nth-child(2){width:130px}
+.enquiry-table th:nth-child(6){width:100px}
+.enquiry-table td{vertical-align:top;overflow-wrap:anywhere}
+.enquiry-id,.enquiry-date{font-family:ui-monospace,monospace;font-size:10px;white-space:nowrap}
+.enquiry-table summary{cursor:pointer;font-weight:600}
+.enquiry-message{white-space:pre-wrap;font-size:11px;line-height:1.5;margin-top:6px;max-height:240px;overflow:auto}

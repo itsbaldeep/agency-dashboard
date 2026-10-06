@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="workspace-back"><a href="/brands/{{ brand_id }}/lifecycle">Brand lifecycle</a> / Enquiries</div>
+<div class="page-header workspace-header enquiry-header"><div><h1>Enquiries</h1><div class="sub">Private enquiry review · {{ rows|length }} shown</div></div><div class="workspace-actions"><a class="btn" href="/brands/{{ brand_id }}/enquiries">Refresh</a></div></div>
+<div class="workspace-note">Review incoming enquiries here. Ongoing marketing requires separate consent.</div>
+{% if not available %}
+<div class="card"><p class="empty">{{ message }}</p></div>
+{% elif not rows %}
+<div class="card"><p class="empty">No enquiries are available yet.</p></div>
+{% else %}
+<div class="card"><div class="table-wrap"><table class="enquiry-table">
+<thead><tr><th scope="col">#</th><th scope="col">Received (UTC)</th><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Company</th><th scope="col">Internal alert</th><th scope="col">Enquiry</th></tr></thead>
+<tbody>{% for row in rows %}<tr>
+<td class="enquiry-id">{{ row.id }}</td><td class="enquiry-date">{{ row.created_at[:16] }}</td><td>{{ row.name }}</td><td>{{ row.email }}</td><td>{{ row.company }}</td>
+<td><span class="badge {{ 'badge-green' if row.notified else 'badge-amber' }}">{{ 'sent' if row.notified else 'pending' }}</span></td>
+<td><details><summary>Read message</summary><div class="enquiry-message">{{ row.message }}</div></details></td>
+</tr>{% endfor %}</tbody>
+</table></div></div>
+{% if next_before %}<a class="btn" href="/brands/{{ brand_id }}/enquiries?before={{ next_before }}">Older enquiries</a>{% endif %}
+{% endif %}
+{% endblock %}
