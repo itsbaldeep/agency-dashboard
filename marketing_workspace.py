@@ -5,13 +5,17 @@ import io
 import json
 import os
 import stat
+import csv
+import zipfile
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
-from flask import Blueprint, render_template, request, jsonify, redirect, abort, make_response
+from flask import Blueprint, render_template, request, jsonify, redirect, abort, make_response, send_file
 import models
 from script_paths import ensure_agency_scripts
 ensure_agency_scripts()
+import marketing_channel_identity as channel_identity
 
 marketing = Blueprint('marketing', __name__)
 TABS = ('overview', 'strategy', 'measurement', 'editorial', 'social', 'lifecycle', 'setup')
@@ -282,6 +286,39 @@ CHANNEL_GUIDES = {
 }
 CHANNEL_CHECKS = ('account_owned','identity_set','assets_uploaded','links_set','access_granted','first_content_reviewed')
 
+_IDENTITY_SLOTS = ('avatar', 'banner')
+_IDENTITY_HASH = re.compile(r'^[0-9a-f]{64}$')
+_IDENTITY_NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+_IDENTITY_MIMES = {'image/png', 'image/jpeg'}
+
+
+def _csv_safe(value):
+    if isinstance(value, str) and value.lstrip()[:1] in ('=', '+', '-', '@'):
+        return "'" + value
+    return value
+
+
+def _identity_json(value):
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value or '{}')
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _identity_ref(value):
+    if not isinstance(value, dict) or set(value) != {'work_id', 'source_revision', 'filename', 'sha256'}:
+        return None
+    if (type(value['work_id']) is not int or value['work_id'] <= 0
+            or type(value['source_revision']) is not int or value['source_revision'] <= 0
+            or type(value['filename']) is not str or not _IDENTITY_NAME.fullmatch(value['filename'])
+            or type(value['sha256']) is not str or not _IDENTITY_HASH.fullmatch(value['sha256'])):
+        return None
+    return dict(value)
+
+
 @marketing.route('/brands/<int:brand_id>/channels/<channel>')
 def channel_setup(brand_id,channel):
     if channel not in CHANNEL_GUIDES: abort(404)
@@ -291,7 +328,19 @@ def channel_setup(brand_id,channel):
         if not brand:abort(404)
         cur.execute('SELECT * FROM marketing_channels WHERE brand_id=%s AND channel=%s',(brand_id,channel));saved=cur.fetchone() or {}
         cur.execute('SELECT profile FROM marketing_brand_profiles WHERE brand_id=%s',(brand_id,));profile=(cur.fetchone() or {}).get('profile',{})
-        return render_template('marketing_channel.html',brand=brand,channel=channel,saved=saved,profile=profile,guide=CHANNEL_GUIDES[channel],checks=CHANNEL_CHECKS)
+        cur.execute("SELECT id,brand_id,kind,channel,title,body,brief,state,revision,planned_at,updated_at FROM marketing_work_items WHERE brand_id=%s AND state<>'archived' ORDER BY updated_at DESC,id DESC LIMIT 100", (brand_id,))
+        work_items = []
+        for item in cur.fetchall():
+            brief = _object(item.get('brief'))
+            media = brief.get('media') if isinstance(brief.get('media'), dict) else {}
+            if item.get('channel') == channel or media:
+                item['brief'] = brief
+                work_items.append(item)
+        work_items = work_items[:30]
+        setup_drafts = [item for item in work_items if item.get('channel') == channel and item.get('kind') == 'channel_setup'][:3]
+        suggested = _object(setup_drafts[0].get('brief')) if setup_drafts else {}
+        first_posts = [item for item in work_items if item.get('channel') == channel and item.get('kind') in ('social_post', 'video_brief')][:3]
+        return render_template('marketing_channel.html',brand=brand,channel=channel,saved=saved,profile=profile,guide=CHANNEL_GUIDES[channel],checks=CHANNEL_CHECKS,work_items=work_items,first_posts=first_posts,suggested_identity={'display_name': suggested.get('suggested_display_name',''), 'bio': suggested.get('suggested_bio','')},identity_assets=_identity_json(saved.get('identity_assets')),identity_candidates=channel_identity.candidates(work_items, brand_id))
     finally:conn.close()
 
 @marketing.route('/api/brands/<int:brand_id>/channels/<channel>',methods=['POST'])
@@ -300,8 +349,13 @@ def channel_save(brand_id,channel):
     payload=request.get_json(silent=True)
     if not isinstance(payload,dict):return jsonify(ok=False,error='Channel details must be an object'),400
     try:
-        revision=int(payload.get('revision',0))
-        values={key:str(payload.get(key,'')).strip() for key in ('profile_url','handle','display_name','bio')}
+        revision=payload.get('revision')
+        if type(revision) is not int or revision < 0: raise ValueError('Revision required')
+        values={key:payload.get(key,'') for key in ('profile_url','handle','display_name','bio')}
+        if any(type(value) is not str for value in values.values()): raise ValueError('Channel details must be text')
+        if any((ord(char) < 32 or ord(char) == 127) for key, value in values.items() if key != 'bio' for char in value): raise ValueError('Channel details contain invalid control characters')
+        if any((ord(char) < 32 and char not in '\r\n\t') or ord(char) == 127 for char in values['bio']): raise ValueError('Bio contains invalid control characters')
+        values={key:value.strip() for key,value in values.items()}
         if any(len(v)>2000 for v in values.values()):raise ValueError('Channel details are too long')
         domain_module().validate_profile({'positioning':values['bio'],'audience':values['handle'],'offer':values['display_name']})
         if values['profile_url']:
@@ -312,19 +366,61 @@ def channel_save(brand_id,channel):
         checked=payload.get('setup_checks',{})
         if not isinstance(checked,dict) or set(checked)-set(CHANNEL_CHECKS) or any(type(v)!=bool for v in checked.values()):raise ValueError('Invalid setup checklist')
         state='configured' if checked and all(checked.get(k) for k in CHANNEL_CHECKS) else 'owner_setup'
+        has_assets = 'identity_assets' in payload
+        identity_assets = payload.get('identity_assets') if has_assets else None
+        if has_assets:
+            if not isinstance(identity_assets, dict) or any(slot not in _IDENTITY_SLOTS for slot in identity_assets):
+                raise ValueError('Invalid identity assets')
+            identity_assets = {slot: _identity_ref(identity_assets[slot]) for slot in identity_assets}
+            if any(identity_assets[slot] is None for slot in identity_assets): raise ValueError('Invalid identity asset reference')
     except (ValueError,TypeError) as exc:return jsonify(ok=False,error=str(exc)),400
     conn=models.db()
     try:
-        cur=conn.cursor();cur.execute('SELECT id FROM brands WHERE id=%s FOR UPDATE',(brand_id,))
+        cur=conn.cursor()
+        try:
+            cur.execute("SET LOCAL lock_timeout='2s'");cur.execute('SELECT id FROM brands WHERE id=%s FOR UPDATE',(brand_id,))
+        except Exception:
+            conn.rollback()
+            return jsonify(ok=False,error='Brand setup is busy; retry'),409
         if not cur.fetchone():return jsonify(ok=False,error='Brand not found'),404
-        cur.execute('SELECT revision FROM marketing_channels WHERE brand_id=%s AND channel=%s',(brand_id,channel));row=cur.fetchone()
+        cur.execute('SELECT revision,identity_assets FROM marketing_channels WHERE brand_id=%s AND channel=%s',(brand_id,channel));row=cur.fetchone()
         if (row['revision'] if row else 0)!=revision:return jsonify(ok=False,error='Setup changed. Reload before saving.'),409
-        cur.execute('''INSERT INTO marketing_channels(brand_id,channel,profile_url,handle,display_name,bio,setup_checks,connection_state)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(brand_id,channel) DO UPDATE SET
+        if has_assets:
+            previous = _identity_json(row.get('identity_assets') if row else {})
+            sources = {}
+            try:
+                for ref in sorted(identity_assets.values(), key=lambda value: value['work_id']):
+                    if ref['work_id'] in sources:
+                        continue
+                    cur.execute('SELECT * FROM marketing_work_items WHERE id=%s AND brand_id=%s FOR SHARE', (ref['work_id'], brand_id))
+                    source = cur.fetchone()
+                    if not source:
+                        raise ValueError('source unavailable')
+                    sources[ref['work_id']] = source
+            except Exception:
+                conn.rollback()
+                return jsonify(ok=False,error='Identity asset source is busy or unavailable'),409
+            for slot, ref in identity_assets.items():
+                source = sources[ref['work_id']]
+                prior = previous.get(slot)
+                if not (isinstance(prior, dict) and prior == ref):
+                    if source.get('revision') != ref['source_revision']:
+                        return jsonify(ok=False,error='New identity asset must use the current source revision'),409
+                try:
+                    channel_identity.resolve_reference(dict(source), brand_id, ref)
+                except (OSError, ValueError, TypeError):
+                    return jsonify(ok=False,error='Identity asset is stale or unavailable'),409
+        else:
+            identity_assets = _identity_json(row.get('identity_assets') if row else {})
+        cur.execute('''INSERT INTO marketing_channels(brand_id,channel,profile_url,handle,display_name,bio,setup_checks,connection_state,identity_assets)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(brand_id,channel) DO UPDATE SET
             profile_url=EXCLUDED.profile_url,handle=EXCLUDED.handle,display_name=EXCLUDED.display_name,bio=EXCLUDED.bio,
             setup_checks=EXCLUDED.setup_checks,connection_state=EXCLUDED.connection_state,
-            revision=marketing_channels.revision+1,updated_at=now() RETURNING revision''',(brand_id,channel,values['profile_url'],values['handle'],values['display_name'],values['bio'],json.dumps(checked),state))
-        rev=cur.fetchone()['revision'];conn.commit();return jsonify(ok=True,revision=rev,state=state,verified=False)
+            identity_assets=EXCLUDED.identity_assets,revision=marketing_channels.revision+1,updated_at=now() RETURNING revision''',(brand_id,channel,values['profile_url'],values['handle'],values['display_name'],values['bio'],json.dumps(checked),state,json.dumps(identity_assets)))
+        rev=cur.fetchone()['revision']
+        cur.execute("INSERT INTO tasks(type,status,params,triggered_by) VALUES ('marketing_channel_setup','done',%s,'dashboard_v2') RETURNING id",(json.dumps({'brand_id':brand_id,'channel':channel,'revision':rev,'identity_assets':identity_assets}),))
+        task_id = (cur.fetchone() or {}).get('id')
+        conn.commit();return jsonify(ok=True,revision=rev,state=state,verified=False,identity_assets=identity_assets,task_id=task_id)
     finally:conn.close()
 
 @marketing.route('/brands/<int:brand_id>/assets')
@@ -336,6 +432,110 @@ def brand_assets(brand_id):
         cur.execute('SELECT id,metadata,created_at FROM content_assets WHERE brand_id=%s ORDER BY id DESC LIMIT 100',(brand_id,));assets=cur.fetchall()
         return render_template('marketing_assets.html',brand=brand,assets=assets)
     finally:conn.close()
+
+
+@marketing.route('/brands/<int:brand_id>/channels/<channel>/identity/<slot>')
+def channel_identity_image(brand_id, channel, slot):
+    if channel not in CHANNEL_GUIDES or slot not in _IDENTITY_SLOTS:
+        abort(404)
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT identity_assets FROM marketing_channels WHERE brand_id=%s AND channel=%s', (brand_id, channel))
+        saved = cur.fetchone() or {}
+        ref = _identity_json(saved.get('identity_assets')).get(slot)
+        if not _identity_ref(ref):
+            abort(404)
+        cur.execute('SELECT * FROM marketing_work_items WHERE id=%s AND brand_id=%s', (ref['work_id'], brand_id))
+        source = cur.fetchone()
+        if not source:
+            abort(404)
+        try:
+            resolved = channel_identity.resolve_reference(dict(source), brand_id, ref)
+        except (OSError, ValueError, TypeError):
+            abort(404)
+        response = make_response(resolved['image_bytes'])
+        response.headers['Content-Type'] = resolved['metadata']['mime']
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    finally:
+        conn.close()
+
+
+@marketing.route('/brands/<int:brand_id>/channels/<channel>/launch-kit')
+def channel_launch_kit(brand_id, channel):
+    if channel not in CHANNEL_GUIDES:
+        abort(404)
+    conn = models.db()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM marketing_channels WHERE brand_id=%s AND channel=%s', (brand_id, channel))
+        saved = cur.fetchone() or {}
+        cur.execute('SELECT id,name FROM brands WHERE id=%s', (brand_id,))
+        brand = cur.fetchone()
+        if not brand:
+            abort(404)
+        cur.execute("SELECT id,brand_id,kind,channel,title,body,brief,state,revision,planned_at FROM marketing_work_items WHERE brand_id=%s AND state<>'archived' AND channel=%s AND kind IN ('social_post','video_brief','channel_setup') ORDER BY planned_at NULLS LAST,id DESC LIMIT 20", (brand_id, channel))
+        work = cur.fetchall()
+        raw_refs = saved.get('identity_assets')
+        if isinstance(raw_refs, dict):
+            refs = raw_refs
+        elif isinstance(raw_refs, str):
+            try:
+                refs = json.loads(raw_refs)
+            except (TypeError, ValueError):
+                refs = None
+        else:
+            refs = {} if raw_refs in (None, '') else None
+        if not isinstance(refs, dict):
+            return jsonify(ok=False, error='Saved identity asset is stale or unavailable'), 409
+        if set(refs) - set(_IDENTITY_SLOTS):
+            return jsonify(ok=False, error='Saved identity asset is stale or unavailable'), 409
+        files = []
+        for slot in _IDENTITY_SLOTS:
+            raw_ref = refs.get(slot)
+            if raw_ref is None:
+                continue
+            ref = _identity_ref(raw_ref)
+            if not ref:
+                return jsonify(ok=False, error='Saved identity asset is stale or unavailable'), 409
+            cur.execute('SELECT * FROM marketing_work_items WHERE id=%s AND brand_id=%s', (ref['work_id'], brand_id))
+            source = cur.fetchone()
+            if not source:
+                return jsonify(ok=False, error='Saved identity asset is stale or unavailable'), 409
+            try:
+                resolved = channel_identity.resolve_reference(dict(source), brand_id, ref)
+                extension = 'png' if resolved['metadata']['mime'] == 'image/png' else 'jpg'
+                files.append((f'{slot}.{extension}', resolved['image_bytes']))
+            except (OSError, ValueError, TypeError):
+                return jsonify(ok=False, error='Saved identity asset is stale or unavailable'), 409
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('README.txt', 'Reviewable channel launch kit. Steps: confirm account ownership, apply the saved identity, check links in a signed-out browser, review each draft and planned date, then complete provider authorization separately. Owner progress only. Provider connection remains unverified. This archive does not approve API access, publishing, or publication. Official guide: ' + CHANNEL_GUIDES[channel][0] + '\n')
+            archive.writestr('identity.json', json.dumps({'brand_id': brand_id, 'channel': channel, 'display_name': saved.get('display_name',''), 'handle': saved.get('handle',''), 'bio': saved.get('bio',''), 'profile_url': saved.get('profile_url',''), 'setup_checks': saved.get('setup_checks',{}), 'identity_assets': refs, 'revision': saved.get('revision', 0), 'provider_verified': False}, sort_keys=True, default=str))
+            for name, data in files:
+                archive.writestr(name, data)
+            rows = [['work_id', 'title', 'kind', 'channel', 'state', 'revision', 'planned_at', 'body']]
+            for item in work:
+                body_value = item.get('body')
+                if not isinstance(body_value, str) or len(body_value) > 50000:
+                    return jsonify(ok=False, error='Launch kit draft body is unavailable'), 409
+                body = body_value
+                planned = item.get('planned_at')
+                planned_text = planned.astimezone(timezone.utc).isoformat() if hasattr(planned, 'astimezone') else (str(planned) if planned else '')
+                values = [item.get('id',''), item.get('title',''), item.get('kind',''), item.get('channel',''), item.get('state',''), item.get('revision',''), planned_text, body]
+                rows.append([_csv_safe(value) for value in values])
+            csv_buffer = io.StringIO(newline='')
+            csv.writer(csv_buffer, lineterminator='\n').writerows(rows)
+            archive.writestr('drafts.csv', csv_buffer.getvalue())
+        output.seek(0)
+        response = send_file(output, mimetype='application/zip', as_attachment=True, download_name=f'channel-launch-kit-{brand_id}-{channel}.zip')
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    finally:
+        conn.close()
 
 @marketing.route('/api/brands/<int:brand_id>/work-items/<int:item_id>/media',methods=['POST'])
 def media_generate(brand_id,item_id):
