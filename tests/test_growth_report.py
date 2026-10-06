@@ -157,6 +157,86 @@ class GrowthReportTests(unittest.TestCase):
         self.assertEqual(report["status"], "available")
         self.assertEqual(report["retention"]["status"], "unavailable")
 
+    def test_activation_schema2_preserves_project_stages_and_aggregate_counts(self):
+        raw = {"captured_at": "2026-10-05T10:00:00Z", "activation": {
+            "schema_version": 2, "status": "available",
+            "stage_totals": {"enquiry_received": 0},
+            "stage_labels": {"enquiry_received": "Enquiries received"},
+            "aggregate_counts": {"internal_alerts_confirmed": 0},
+            "window": {"days": 28, "start": "2026-09-08", "end": "2026-10-05"},
+            "coverage": {}, "health": {"status": "available", "last_event_at": "2026-10-05T09:00:00Z"},
+        }}
+        report = dashboard._normalise_activation_report(raw)
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["stage_totals"], {"enquiry_received": 0})
+        self.assertEqual(report["aggregate_counts"], {"internal_alerts_confirmed": 0})
+        self.assertEqual(report["totals"], {"enquiry_received": 0})
+        self.assertNotIn("signups", report["totals"])
+        self.assertEqual(report["coverage"], {})
+
+    def test_activation_schema2_accepts_aggregate_only_and_rejects_malformed_values(self):
+        base = {"schema_version": 2, "status": "available", "stage_totals": {}, "stage_labels": {},
+                "aggregate_counts": {"orders": 3}}
+        report = dashboard._normalise_activation_report({"activation": base})
+        self.assertEqual(report["aggregate_counts"], {"orders": 3})
+        for invalid in (
+            {**base, "aggregate_counts": {"orders": -1}},
+            {**base, "aggregate_counts": {"orders": True}},
+            {**base, "stage_labels": {"unknown": "bad\x7flabel"}},
+            {**base, "status": "mystery"},
+            {**base, "status": []},
+            {**base, "health": {"status": "available\n"}},
+            {**base, "health": {"status": "bad\x7fstatus"}},
+            {**base, "health": {"last_event_at": "bad\x7ftime"}},
+            {**base, "window": {"days": 0}},
+            {**base, "window": {"start": "bad\x7fdate"}},
+        ):
+            self.assertEqual(dashboard._normalise_activation_report({"activation": invalid})["status"], "unavailable")
+        compatible = dashboard._normalise_activation_report({"activation": {
+            **base, "stage_labels": {"unknown": "Future source label"}}})
+        self.assertEqual(compatible["status"], "available")
+
+    def test_schema2_brand_report_uses_generic_labels_without_signup_claims(self):
+        raw = {"captured_at": "2026-10-05T10:00:00Z", "activation": {
+            "schema_version": 2, "status": "available", "stage_totals": {"enquiry_received": 1},
+            "stage_labels": {"enquiry_received": "Enquiries received"},
+            "aggregate_counts": {"internal_alerts_confirmed": 1}, "coverage": {},
+            "health": {"status": "available", "last_event_at": "2026-10-05T09:00:00Z"},
+            "window": {"days": 28, "start": "2026-09-08", "end": "2026-10-05"}}}
+        report = dashboard._normalise_activation_report(raw)
+        with dashboard.app.test_request_context("/"):
+            html = dashboard.render_template(
+                "brand_report.html", brand={"id": 31, "name": "Synthetic"}, activation_report=report,
+                audit_summary={}, audit_history=[], domain="", audit_date_fmt="", capabilities=[],
+                full_audit_run=None, full_audit_children=[], marketing_assessment=None,
+                marketing_assessment_stages=[], brand_properties=[], competitors=[], audit=None,
+                seo_audit=None, seo_summary={}, seo_data={}, suggestions=[], visibility_rows=[],
+                ch_error=False, content_items=[], recent_tasks=[], content_by_suggestion={},
+                task_by_suggestion={}, agent_allowed=False, repo_url=None, project_id=None,
+                measurement_setup={}, seo_cleanup_groups=[], seo_cleanup_batch=None,
+            )
+        section = html.split('id="acquisition-activation-report"', 1)[1]
+        self.assertIn("Enquiries received", section)
+        self.assertIn("Internal Alerts Confirmed", html)
+        self.assertNotIn("aggregate, consented", section)
+        self.assertNotIn("Signups", section)
+
+    def test_schema2_lifecycle_view_uses_project_counts_without_funnel_language(self):
+        report = dashboard._normalise_activation_report({"activation": {
+            "schema_version": 2, "status": "available", "stage_totals": {"enquiry_received": 1},
+            "stage_labels": {"enquiry_received": "Enquiries received"},
+            "aggregate_counts": {"internal_alerts_confirmed": 1}}})
+        context = {"brand": {"id": 31, "name": "Synthetic"}, "profile": {}, "profile_revision": 0,
+                   "properties": {}, "tab": "lifecycle", "tabs": (), "items": [], "audits": [],
+                   "content_items": [], "suggestions": [], "tasks": [], "seo": None, "evidence": {},
+                   "sources": {}, "growth_report": {}, "activation_report": report, "plays": {},
+                   "channels": {}, "schedule_enabled": False, "enquiry_source_configured": False}
+        with dashboard.app.test_request_context("/"):
+            html = dashboard.render_template("marketing_workspace.html", **context)
+        self.assertIn("Enquiries received", html)
+        self.assertIn("Internal Alerts Confirmed", html)
+        self.assertIn("do not establish signups", html)
+
     def test_core_collector_contract_reaches_dashboard_without_evidence_loss(self):
         scripts = Path(os.environ.get("AGENCY_SCRIPT_DIR", "/home/agency/core/agency-os/scripts"))
         sys.path.insert(0, str(scripts))

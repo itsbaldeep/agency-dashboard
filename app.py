@@ -368,6 +368,9 @@ def _normalise_activation_report(seo_data):
         "captured_at": None,
         "window": {},
         "totals": {},
+        "stage_totals": {},
+        "stage_labels": {},
+        "aggregate_counts": {},
         "cohorts": [],
         "coverage": {},
         "signup_cohort_totals": {},
@@ -376,20 +379,96 @@ def _normalise_activation_report(seo_data):
     }
     raw = seo_data.get("activation") if isinstance(seo_data, dict) else None
     if isinstance(raw,dict) and raw.get('schema_version') == 2:
-        stages=raw.get('stage_totals') if isinstance(raw.get('stage_totals'),dict) else {}
-        clean={key:value for key,value in list(stages.items())[:30]
-               if isinstance(key,str) and re.fullmatch(r'[a-z][a-z0-9_]{0,63}',key)
-               and type(value)==int and 0<=value<=10**12}
-        if not clean:return unavailable
-        return {'status':raw.get('status','unavailable'),'schema_version':2,
-                'stage_totals':clean,'stage_labels':raw.get('stage_labels',{}),
-                'totals':clean,'window':raw.get('window',{}),'captured_at':seo_data.get('captured_at'),
-                'retention':raw.get('retention',{'status':'unavailable','counts':{}}),
-                'cohorts':[],'coverage':{},'signup_cohort_totals':{},'health':raw.get('health',{})}
+        status = raw.get("status")
+        if not isinstance(status, str) or status not in {"available", "partial", "unavailable"}:
+            return unavailable
+        stages = raw.get("stage_totals", {})
+        aggregates = raw.get("aggregate_counts", {})
+        labels = raw.get("stage_labels", {})
+        if not isinstance(stages, dict) or len(stages) > 30:
+            return unavailable
+        if not isinstance(aggregates, dict) or len(aggregates) > 50:
+            return unavailable
+        if not isinstance(labels, dict) or len(labels) > 30:
+            return unavailable
+        key_pattern = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+        def clean_counts(values):
+            clean = {}
+            for key, value in values.items():
+                if (not isinstance(key, str) or not key_pattern.fullmatch(key)
+                        or type(value) is not int or value < 0 or value > 10**12):
+                    return None
+                clean[key] = value
+            return clean
+        clean_stages = clean_counts(stages)
+        clean_aggregates = clean_counts(aggregates)
+        if clean_stages is None or clean_aggregates is None or not clean_stages and not clean_aggregates:
+            return unavailable
+        clean_labels = {}
+        for key, value in labels.items():
+            if (not isinstance(key, str) or not key_pattern.fullmatch(key)
+                    or type(value) is not str or len(value) > 200
+                    or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+                return unavailable
+            clean_labels[key] = value
+        window = raw.get("window", {})
+        coverage = raw.get("coverage", {})
+        health = raw.get("health", {})
+        if (not isinstance(window, dict) or not isinstance(coverage, dict) or len(coverage) > 50
+                or not isinstance(health, dict)):
+            return unavailable
+        days = window.get("days", 28)
+        if type(days) is not int or not 1 <= days <= 90:
+            return unavailable
+        clean_window = {"days": days, "start": window.get("start", ""), "end": window.get("end", "")}
+        if any(type(value) is not str or len(value) > 40 or any(ord(char) < 32 or ord(char) == 127 for char in value)
+               for value in (clean_window["start"], clean_window["end"])):
+            return unavailable
+        clean_coverage = clean_counts(coverage)
+        if clean_coverage is None:
+            return unavailable
+        last_event = health.get("last_event_at", "")
+        health_status = health.get("status", "unknown")
+        if (type(last_event) is not str or len(last_event) > 80
+                or any(ord(char) < 32 or ord(char) == 127 for char in last_event)
+                or type(health_status) is not str or len(health_status) > 40
+                or any(ord(char) < 32 or ord(char) == 127 for char in health_status)):
+            return unavailable
+        retention_raw = raw.get('retention', {})
+        retention_keys = ("notifications_generated", "notifications_read", "notifications_clicked",
+                          "unread_notifications", "active_watchlist_jobs", "active_saved_searches",
+                          "digest_previews", "email_blocked", "email_failed", "email_sent",
+                          "email_delivered", "email_opened", "email_clicked", "email_bounced",
+                          "email_spam", "email_suppressed", "email_unsubscribed", "email_eligible")
+        if not isinstance(retention_raw, dict):
+            return unavailable
+        retention_counts = retention_raw.get('counts', {})
+        if not isinstance(retention_counts, dict):
+            return unavailable
+        clean_retention_counts = {}
+        for key, value in retention_counts.items():
+            if (key not in retention_keys or type(value) is not int or value < 0 or value > 10**12):
+                return unavailable
+            clean_retention_counts[key] = value
+        retention_status = retention_raw.get('status', 'unavailable')
+        email_status = retention_raw.get('email_status', 'unavailable')
+        if (not isinstance(retention_status, str) or retention_status not in {'available', 'unavailable'}
+                or not isinstance(email_status, str) or email_status not in {'not_connected', 'disabled', 'ready', 'unavailable'}):
+            return unavailable
+        clean_retention = {'status': retention_status if clean_retention_counts else 'unavailable',
+                           'counts': clean_retention_counts, 'email_status': email_status}
+        return {'status': status, 'schema_version': 2,
+                'stage_totals': clean_stages, 'stage_labels': clean_labels,
+                'aggregate_counts': clean_aggregates, 'totals': clean_stages,
+                'window': clean_window, 'captured_at': seo_data.get('captured_at'),
+                'retention': clean_retention,
+                'cohorts': [], 'coverage': clean_coverage,
+                'signup_cohort_totals': {},
+                'health': {'last_event_at': last_event, 'status': health_status}}
     if not isinstance(raw, dict) or raw.get("schema_version") != 1:
         return unavailable
     status = raw.get("status")
-    if status not in {"available", "partial", "unavailable"}:
+    if not isinstance(status, str) or status not in {"available", "partial", "unavailable"}:
         return unavailable
     window = raw.get("window") if isinstance(raw.get("window"), dict) else {}
     totals = raw.get("totals") if isinstance(raw.get("totals"), dict) else {}
@@ -402,10 +481,12 @@ def _normalise_activation_report(seo_data):
         value = retention_raw.get("counts", {}).get(key) if isinstance(retention_raw.get("counts"), dict) else None
         if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 10**12:
             retention_counts[key] = value
-    retention_status = retention_raw.get("status") if retention_raw.get("status") in {"available", "unavailable"} else "unavailable"
+    retention_value = retention_raw.get("status")
+    retention_status = retention_value if isinstance(retention_value, str) and retention_value in {"available", "unavailable"} else "unavailable"
     if not retention_counts:
         retention_status = "unavailable"
-    email_status = retention_raw.get("email_status") if retention_raw.get("email_status") in {"not_connected", "disabled", "ready", "unavailable"} else "unavailable"
+    email_value = retention_raw.get("email_status")
+    email_status = email_value if isinstance(email_value, str) and email_value in {"not_connected", "disabled", "ready", "unavailable"} else "unavailable"
     allowed = ("signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served")
     clean_totals = {key: _growth_number(totals.get(key)) for key in allowed}
     if any(value is None for value in clean_totals.values()) and status == "available":
