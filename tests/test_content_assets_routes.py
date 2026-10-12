@@ -1,3 +1,4 @@
+from browser_client import browser_client
 import copy
 import json
 import sys
@@ -58,7 +59,7 @@ class FakeConnection:
 class ContentAssetRouteTests(unittest.TestCase):
     def setUp(self):
         dashboard.app.config.update(TESTING=True)
-        self.client = dashboard.app.test_client()
+        self.client = browser_client(dashboard.app)
 
     def test_upload_and_attach_require_current_revision(self):
         conn = FakeConnection([draft()])

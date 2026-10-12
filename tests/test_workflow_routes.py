@@ -1,3 +1,4 @@
+from browser_client import browser_client
 import json
 import sys
 import tempfile
@@ -45,7 +46,7 @@ class FakeConnection:
 class WorkflowRouteTests(unittest.TestCase):
     def setUp(self):
         dashboard.app.config.update(TESTING=True)
-        self.client = dashboard.app.test_client()
+        self.client = browser_client(dashboard.app)
 
     def test_resume_merges_named_suggestion_inputs_into_same_task(self):
         conn = FakeConnection([{

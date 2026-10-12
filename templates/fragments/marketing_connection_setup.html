@@ -1,0 +1,13 @@
+<div class="card" id="marketing-connection-setup" data-brand-id="{{ brand.id }}">
+  <div class="card-title">First party journey source</div>
+  <p class="subtle">Store a project owned local endpoint and credential reference. The dashboard never reads or displays credential values.</p>
+  <form id="marketing-connection-form" class="form-grid mt-2">
+    <label>Local base URL<input name="base_url" required placeholder="http://127.0.0.1:3100"></label>
+    <label>Endpoint path<input name="endpoint" required value="/marketing/summary" maxlength="300"></label>
+    <label>Credential reference path<input name="credential_ref" required maxlength="500" autocomplete="off"></label>
+    <label>Credential name<input name="credential_name" required maxlength="128" autocomplete="off" placeholder="MARKETING_READ_TOKEN"></label>
+    <div class="full-width"><button class="btn btn-primary" type="submit">Save connection reference</button></div>
+  </form>
+  <div id="marketing-connection-status" role="status" class="subtle mt-2"></div>
+</div>
+<script src="/static/marketing_connections.js"></script>

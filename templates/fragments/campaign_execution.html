@@ -1,0 +1,20 @@
+<div class="card">
+  <div class="card-title">Audience, approval and delivery</div>
+  <p class="subtle mt-2">Review copy and rules, then collect a fresh audience preview. Any edit requires a new preview. The source keeps recipient details and checks consent again before sending.</p>
+  <div class="workspace-actions mt-2"><button id="campaign-preview" class="btn" type="button" disabled>Refresh audience preview</button></div>
+  <div id="campaign-preview-evidence" class="subtle mt-2">Loading source readiness.</div>
+  <form id="campaign-review-form" class="form-grid mt-2">
+    <label>Exact delivery time<input name="send_at" type="datetime-local" required></label>
+    <div><button class="btn btn-primary" type="submit" disabled>Review exact campaign</button></div>
+  </form>
+  <div id="campaign-execution-status" role="status" class="subtle mt-2"></div>
+  <div class="table-wrap mt-2"><table><thead><tr><th>Run</th><th>State</th><th>Delivery time</th><th>Actions</th></tr></thead><tbody id="campaign-runs"></tbody></table></div>
+</div>
+<dialog id="campaign-approval-dialog" class="workflow-dialog">
+  <h3>Approve this exact campaign</h3>
+  <p class="subtle">This authorizes delivery, rather than draft preparation. Only the frozen audience may be contacted. New consent or suppression checks may remove recipients.</p>
+  <pre id="campaign-approval-details" class="draft-body mt-2"></pre>
+  <label class="check-row mt-2"><input id="campaign-approval-confirm" type="checkbox">I approve this exact message, audience and delivery time.</label>
+  <div class="workspace-actions mt-2"><button id="campaign-approval-close" class="btn" type="button">Close</button><button id="campaign-approval-submit" class="btn btn-primary" type="button" disabled>Approve delivery</button></div>
+</dialog>
+<script src="/static/campaign-execution.js" defer></script>

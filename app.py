@@ -23,14 +23,43 @@ ensure_agency_scripts()
 from content_calendar import content_calendar
 from content_visuals import content_visuals, revision as content_revision, visual_module
 from content_asset_routes import assets
+from marketing_workspace import marketing, portfolio_rows
+from marketing_connections import connections
+from publication_recovery_routes import recovery
+from campaign_routes import campaigns
+from email_provider_routes import email_provider
+from campaign_execution_routes import campaign_execution
+from core_enquiries import enquiries
 
 app = Flask(__name__)
 app.register_blueprint(content_calendar)
 app.register_blueprint(content_visuals)
 app.register_blueprint(assets)
+app.register_blueprint(marketing)
+app.register_blueprint(connections)
+app.register_blueprint(recovery)
+app.register_blueprint(campaigns)
+app.register_blueprint(email_provider)
+app.register_blueprint(campaign_execution)
+app.register_blueprint(enquiries)
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
 app.jinja_loader.searchpath = [str(TEMPLATES)]
+
+@app.before_request
+def protect_dashboard_writes():
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and request.headers.get('Origin') != request.host_url.rstrip('/'):
+        return jsonify(ok=False, error='Cross-site write rejected; same-origin header required'), 403
+
+
+@app.before_request
+def retire_dashboard_coding():
+    """Coding and repository actions belong in Codex, outside marketing delivery."""
+    if (request.path == '/dev-tasks' or request.path.startswith('/api/dev-tasks/')
+            or (request.method == 'POST' and request.path.startswith('/api/design/'))
+            or request.path == '/projects/onboard'
+            or (request.path.startswith('/projects/') and request.path.endswith('/fix'))):
+        return jsonify(ok=False,error='Development workflows have moved to Codex. Use the brand workspace for marketing.'),410
 
 
 @app.context_processor
@@ -39,7 +68,7 @@ def operator_context():
     first = request.path.strip("/").split("/", 1)[0] or "dashboard"
     return {
         "nav_alert_count": models.get_alert_nav_count(),
-        "active": "dashboard" if first == "dashboard" else first,
+        "active": "calendar" if request.path.startswith('/content/calendar') else ("dashboard" if first == "dashboard" else first),
     }
 
 @app.template_filter('jsonloads')
@@ -112,7 +141,7 @@ def filesize(value):
 @app.route("/")
 @app.route("/dashboard")
 def dashboard():
-    return render_template("dashboard.html")
+    return render_template("marketing_portfolio.html", brands=portfolio_rows(), portfolio=True)
 
 
 @app.route("/dashboard/data")
@@ -339,21 +368,125 @@ def _normalise_activation_report(seo_data):
         "captured_at": None,
         "window": {},
         "totals": {},
+        "stage_totals": {},
+        "stage_labels": {},
+        "aggregate_counts": {},
         "cohorts": [],
         "coverage": {},
         "signup_cohort_totals": {},
         "health": {},
+        "retention": {"status": "unavailable", "counts": {}, "email_status": "unavailable"},
     }
     raw = seo_data.get("activation") if isinstance(seo_data, dict) else None
+    if isinstance(raw,dict) and raw.get('schema_version') == 2:
+        status = raw.get("status")
+        if not isinstance(status, str) or status not in {"available", "partial", "unavailable"}:
+            return unavailable
+        stages = raw.get("stage_totals", {})
+        aggregates = raw.get("aggregate_counts", {})
+        labels = raw.get("stage_labels", {})
+        if not isinstance(stages, dict) or len(stages) > 30:
+            return unavailable
+        if not isinstance(aggregates, dict) or len(aggregates) > 50:
+            return unavailable
+        if not isinstance(labels, dict) or len(labels) > 30:
+            return unavailable
+        key_pattern = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+        def clean_counts(values):
+            clean = {}
+            for key, value in values.items():
+                if (not isinstance(key, str) or not key_pattern.fullmatch(key)
+                        or type(value) is not int or value < 0 or value > 10**12):
+                    return None
+                clean[key] = value
+            return clean
+        clean_stages = clean_counts(stages)
+        clean_aggregates = clean_counts(aggregates)
+        if clean_stages is None or clean_aggregates is None or not clean_stages and not clean_aggregates:
+            return unavailable
+        clean_labels = {}
+        for key, value in labels.items():
+            if (not isinstance(key, str) or not key_pattern.fullmatch(key)
+                    or type(value) is not str or len(value) > 200
+                    or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+                return unavailable
+            clean_labels[key] = value
+        window = raw.get("window", {})
+        coverage = raw.get("coverage", {})
+        health = raw.get("health", {})
+        if (not isinstance(window, dict) or not isinstance(coverage, dict) or len(coverage) > 50
+                or not isinstance(health, dict)):
+            return unavailable
+        days = window.get("days", 28)
+        if type(days) is not int or not 1 <= days <= 90:
+            return unavailable
+        clean_window = {"days": days, "start": window.get("start", ""), "end": window.get("end", "")}
+        if any(type(value) is not str or len(value) > 40 or any(ord(char) < 32 or ord(char) == 127 for char in value)
+               for value in (clean_window["start"], clean_window["end"])):
+            return unavailable
+        clean_coverage = clean_counts(coverage)
+        if clean_coverage is None:
+            return unavailable
+        last_event = health.get("last_event_at", "")
+        health_status = health.get("status", "unknown")
+        if (type(last_event) is not str or len(last_event) > 80
+                or any(ord(char) < 32 or ord(char) == 127 for char in last_event)
+                or type(health_status) is not str or len(health_status) > 40
+                or any(ord(char) < 32 or ord(char) == 127 for char in health_status)):
+            return unavailable
+        retention_raw = raw.get('retention', {})
+        retention_keys = ("notifications_generated", "notifications_read", "notifications_clicked",
+                          "unread_notifications", "active_watchlist_jobs", "active_saved_searches",
+                          "digest_previews", "email_blocked", "email_failed", "email_sent",
+                          "email_delivered", "email_opened", "email_clicked", "email_bounced",
+                          "email_spam", "email_suppressed", "email_unsubscribed", "email_eligible")
+        if not isinstance(retention_raw, dict):
+            return unavailable
+        retention_counts = retention_raw.get('counts', {})
+        if not isinstance(retention_counts, dict):
+            return unavailable
+        clean_retention_counts = {}
+        for key, value in retention_counts.items():
+            if (key not in retention_keys or type(value) is not int or value < 0 or value > 10**12):
+                return unavailable
+            clean_retention_counts[key] = value
+        retention_status = retention_raw.get('status', 'unavailable')
+        email_status = retention_raw.get('email_status', 'unavailable')
+        if (not isinstance(retention_status, str) or retention_status not in {'available', 'unavailable'}
+                or not isinstance(email_status, str) or email_status not in {'not_connected', 'disabled', 'ready', 'unavailable'}):
+            return unavailable
+        clean_retention = {'status': retention_status if clean_retention_counts else 'unavailable',
+                           'counts': clean_retention_counts, 'email_status': email_status}
+        return {'status': status, 'schema_version': 2,
+                'stage_totals': clean_stages, 'stage_labels': clean_labels,
+                'aggregate_counts': clean_aggregates, 'totals': clean_stages,
+                'window': clean_window, 'captured_at': seo_data.get('captured_at'),
+                'retention': clean_retention,
+                'cohorts': [], 'coverage': clean_coverage,
+                'signup_cohort_totals': {},
+                'health': {'last_event_at': last_event, 'status': health_status}}
     if not isinstance(raw, dict) or raw.get("schema_version") != 1:
         return unavailable
     status = raw.get("status")
-    if status not in {"available", "partial", "unavailable"}:
+    if not isinstance(status, str) or status not in {"available", "partial", "unavailable"}:
         return unavailable
     window = raw.get("window") if isinstance(raw.get("window"), dict) else {}
     totals = raw.get("totals") if isinstance(raw.get("totals"), dict) else {}
     coverage = raw.get("coverage") if isinstance(raw.get("coverage"), dict) else {}
     health = raw.get("health") if isinstance(raw.get("health"), dict) else {}
+    retention_raw = raw.get("retention") if isinstance(raw.get("retention"), dict) else {}
+    retention_keys = ("notifications_generated", "notifications_read", "notifications_clicked", "unread_notifications", "active_watchlist_jobs", "active_saved_searches", "digest_previews", "email_blocked", "email_failed")
+    retention_counts = {}
+    for key in retention_keys:
+        value = retention_raw.get("counts", {}).get(key) if isinstance(retention_raw.get("counts"), dict) else None
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 10**12:
+            retention_counts[key] = value
+    retention_value = retention_raw.get("status")
+    retention_status = retention_value if isinstance(retention_value, str) and retention_value in {"available", "unavailable"} else "unavailable"
+    if not retention_counts:
+        retention_status = "unavailable"
+    email_value = retention_raw.get("email_status")
+    email_status = email_value if isinstance(email_value, str) and email_value in {"not_connected", "disabled", "ready", "unavailable"} else "unavailable"
     allowed = ("signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served")
     clean_totals = {key: _growth_number(totals.get(key)) for key in allowed}
     if any(value is None for value in clean_totals.values()) and status == "available":
@@ -382,6 +515,7 @@ def _normalise_activation_report(seo_data):
         "coverage": clean_coverage,
         "signup_cohort_totals": cohort_totals,
         "health": {"last_event_at": health.get("last_event_at"), "status": health.get("status") or "unknown"},
+        "retention": {"status": retention_status, "counts": retention_counts, "email_status": email_status},
     }
 
 
@@ -900,17 +1034,15 @@ def enqueue_seo_measurement(brand_id):
         if not brand:
             return jsonify({"ok": False, "error": "Brand not found"}), 404
         project_id = brand.get("project_id")
-        if not project_id:
-            return jsonify({"ok": False, "error": "Brand has no project"}), 400
-
-        cur.execute("SELECT id, lifecycle, state FROM projects WHERE id=%s", (project_id,))
-        project = cur.fetchone()
-        if not project:
-            return jsonify({"ok": False, "error": "Project not found"}), 400
-        if project.get("lifecycle") != "active":
-            return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
-        if project.get("state") not in {"scaffolded", "building", "preview", "staged", "live"}:
-            return jsonify({"ok": False, "error": "Project is not eligible for measurement"}), 409
+        if project_id:
+            cur.execute("SELECT id, lifecycle, state FROM projects WHERE id=%s", (project_id,))
+            project = cur.fetchone()
+            if not project:
+                return jsonify({"ok": False, "error": "Project not found"}), 400
+            if project.get("lifecycle") != "active":
+                return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
+            if project.get("state") not in {"scaffolded", "building", "preview", "staged", "live"}:
+                return jsonify({"ok": False, "error": "Project is not eligible for measurement"}), 409
 
         cur.execute("SELECT property_type, value FROM brand_properties WHERE brand_id=%s", (brand_id,))
         properties = {p.get("property_type"): p.get("value") for p in cur.fetchall()}
@@ -983,12 +1115,11 @@ def save_measurement_setup(brand_id):
         brand = cur.fetchone()
         if not brand:
             return jsonify({"ok": False, "error": "Brand not found"}), 404
-        if not brand.get("project_id"):
-            return jsonify({"ok": False, "error": "Brand has no linked project"}), 400
-        cur.execute("SELECT lifecycle FROM projects WHERE id=%s", (brand["project_id"],))
-        project = cur.fetchone()
-        if not project or project.get("lifecycle") != "active":
-            return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
+        if brand.get("project_id"):
+            cur.execute("SELECT lifecycle FROM projects WHERE id=%s", (brand["project_id"],))
+            project = cur.fetchone()
+            if not project or project.get("lifecycle") != "active":
+                return jsonify({"ok": False, "error": "Project lifecycle is not active"}), 409
         _upsert_brand_property(cur, brand_id, "gsc_property", gsc_value)
         _upsert_brand_property(cur, brand_id, "ga4_property_id", ga4_value)
         _upsert_brand_property(cur, brand_id, "ga4_measurement_id", measurement_value)
@@ -1084,6 +1215,8 @@ def onboard_client():
 
     if not ctype or ctype not in ("marketing_only", "existing_code_marketing", "clean_slate"):
         return jsonify({"ok": False, "error": "valid type required"}), 400
+    if ctype != "marketing_only":
+        return jsonify({"ok": False, "error": "Coding and project creation onboarding has moved to Codex. Use marketing_only for dashboard intake."}), 410
     if not user_input:
         return jsonify({"ok": False, "error": "input required"}), 400
 
@@ -1881,9 +2014,13 @@ def publication_context(item):
         ready = bool(config.get('type') == 'ghost' and config.get('enabled'))
         message = ('Publishes this reviewed draft to the project’s Ghost blog. No email or newsletter will be sent.' if ready else
                    'This project uses Ghost. Its publishing connection is not enabled yet. You can export the draft for manual review in the blog editor.')
+    elif driver == 'static':
+        ready = bool(config.get('enabled') and config.get('output_root') and str(config.get('base_url','')).startswith('https://'))
+        name = 'Static blog'
+        message = 'Publishes the exact reviewed article to the brand-owned blog, with an ownership receipt and recoverable archive. No email is sent.' if ready else 'The static blog destination is not enabled.'
     elif ready:
         message = 'Uses the project’s saved publishing connection. Confirm only when this draft is ready to go public.'
-    if ready and driver != 'ghost' and any(isinstance(b, dict) and b.get('type') == 'editorial_visual' for b in item.get('content_blocks') or []):
+    if ready and driver not in ('ghost','static') and any(isinstance(b, dict) and b.get('type') == 'editorial_visual' for b in item.get('content_blocks') or []):
         ready = False
         message = 'The current publishing adapter cannot preserve this draft’s visuals. Export HTML for review; dashboard publication is blocked to avoid losing them.'
     return {'name': name, 'ready': ready, 'message': message,
@@ -2028,7 +2165,7 @@ def content_approve(ci_id):
             return jsonify(ok=False, error=context['message']), 409
         approved_digest = None
         approved_destination = None
-        if context['name'] == 'Ghost':
+        if context['name'] in ('Ghost','Static blog'):
             if payload.get('revision') != content_revision(item):
                 return jsonify(ok=False, error='This draft changed. Reload the preview and review it before publishing.'), 409
             from ghost_publisher import content_digest

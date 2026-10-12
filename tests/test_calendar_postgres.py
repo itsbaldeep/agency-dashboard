@@ -1,3 +1,4 @@
+from browser_client import browser_client
 """Opt-in real SQL contract test. All fixtures and queued tasks are temporary."""
 import os
 import json
@@ -63,7 +64,7 @@ class CalendarPostgresTests(unittest.TestCase):
                            audience="test audience", hypothesis="test hypothesis", success_metric="gsc_clicks",
                            planned_date="2026-10-01", competitor_urls=["https://example.com/article"], evidence_audit_id=1)
             with patch("models.db", return_value=Session()), patch("models.get_alert_nav_count", return_value=0):
-                client = dashboard.app.test_client()
+                client = browser_client(dashboard.app)
                 response = client.post("/content/calendar", json=payload)
                 self.assertEqual(response.status_code, 201)
                 plan = response.json["id"]
