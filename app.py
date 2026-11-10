@@ -23,6 +23,7 @@ ensure_agency_scripts()
 from content_calendar import content_calendar
 from content_visuals import content_visuals, revision as content_revision, visual_module
 from content_asset_routes import assets
+from content_text_edits import content_text_edits
 from marketing_workspace import marketing, portfolio_rows
 from marketing_connections import connections
 from publication_recovery_routes import recovery
@@ -35,6 +36,7 @@ app = Flask(__name__)
 app.register_blueprint(content_calendar)
 app.register_blueprint(content_visuals)
 app.register_blueprint(assets)
+app.register_blueprint(content_text_edits)
 app.register_blueprint(marketing)
 app.register_blueprint(connections)
 app.register_blueprint(recovery)
@@ -2025,6 +2027,11 @@ def publication_context(item):
         message = 'The current publishing adapter cannot preserve this draft’s visuals. Export HTML for review; dashboard publication is blocked to avoid losing them.'
     return {'name': name, 'ready': ready, 'message': message,
             'url': config.get('base_url', '') if ready else ''}
+
+
+@app.route("/content/<int:item_id>/edit")
+def content_edit_page(item_id):
+    return render_template("content_edit.html", active="content", item_id=item_id)
 
 
 @app.route("/content/<int:item_id>/preview")
