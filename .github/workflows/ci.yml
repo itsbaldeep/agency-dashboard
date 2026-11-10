@@ -22,6 +22,7 @@ jobs:
       - run: python3 -m py_compile app.py models.py
       - run: pip install -r requirements.txt
       - run: python3 -m py_compile app.py
+      - run: sudo install -d -o "$USER" /home/agency/engagements
       - run: python3 -m unittest discover -s tests -p 'test_*.py'
         env:
           AGENCY_SCRIPT_DIR: ${{ github.workspace }}/core/agency-os/scripts
