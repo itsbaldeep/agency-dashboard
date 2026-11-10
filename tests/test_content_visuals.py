@@ -1,3 +1,4 @@
+from browser_client import browser_client
 import copy
 import json
 import sys
@@ -61,7 +62,7 @@ class Database:
 class VisualWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.db = Database()
-        self.client = dashboard.app.test_client()
+        self.client = browser_client(dashboard.app)
         self.patch = mock.patch.object(workflow.models, 'db', return_value=self.db)
         self.patch.start()
         self.addCleanup(self.patch.stop)

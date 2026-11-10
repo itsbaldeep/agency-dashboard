@@ -1,3 +1,4 @@
+from browser_client import browser_client
 import json
 import sys
 import unittest
@@ -189,7 +190,7 @@ class SeoMeasurementTests(unittest.TestCase):
                                     {"property_type": "ga4_property_id", "value": "123"}])
         conn = Connection(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/api/brands/7/seo-measurement")
+            response = browser_client(dashboard.app).post("/api/brands/7/seo-measurement")
         self.assertEqual(response.status_code, 200)
         insert = next(params for sql, params in cursor.calls if "INSERT INTO tasks" in sql)
         self.assertEqual(json.loads(insert[0]), {"brand_id": 7, "project_id": 3, "url": "https://example.test",
@@ -199,13 +200,13 @@ class SeoMeasurementTests(unittest.TestCase):
         duplicate = Connection(Cursor(rows={"brand": {"id": 7, "project_id": 3}, "project": {"id": 3, "lifecycle": "active", "state": "live"}},
                                       properties=[{"property_type": "domain", "value": "example.test"}], duplicate={"id": 44}))
         with mock.patch.object(dashboard.models, "db", return_value=duplicate):
-            response = dashboard.app.test_client().post("/api/brands/7/seo-measurement")
+            response = browser_client(dashboard.app).post("/api/brands/7/seo-measurement")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["deduplicated"])
 
         missing = Connection(Cursor())
         with mock.patch.object(dashboard.models, "db", return_value=missing):
-            response = dashboard.app.test_client().post("/api/brands/999/seo-measurement")
+            response = browser_client(dashboard.app).post("/api/brands/999/seo-measurement")
         self.assertEqual(response.status_code, 404)
 
     def test_measurement_setup_validates_and_saves_non_secret_ids(self):
@@ -213,7 +214,7 @@ class SeoMeasurementTests(unittest.TestCase):
                               "project": {"id": 3, "lifecycle": "active"}})
         conn = Connection(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post(
+            response = browser_client(dashboard.app).post(
                 "/api/brands/7/measurement-setup",
                 data={"gsc_property": "sc-domain:TrueApply.in",
                       "ga4_property_id": "553391253",
@@ -229,7 +230,7 @@ class SeoMeasurementTests(unittest.TestCase):
 
     def test_measurement_setup_rejects_non_string_json_values(self):
         with mock.patch.object(dashboard.models, "db") as db:
-            response = dashboard.app.test_client().post(
+            response = browser_client(dashboard.app).post(
                 "/api/brands/7/measurement-setup",
                 json={"gsc_property": 123, "ga4_property_id": "553391253", "ga4_measurement_id": "G-2GW0337CJV"},
             )
@@ -242,7 +243,7 @@ class SeoMeasurementTests(unittest.TestCase):
                               "domain": {"value": "trueapply.in"}}, duplicate={"id": 77})
         conn = Connection(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/api/brands/7/full-audit")
+            response = browser_client(dashboard.app).post("/api/brands/7/full-audit")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["deduplicated"])
 
@@ -251,7 +252,7 @@ class SeoMeasurementTests(unittest.TestCase):
                               "project": {"id": 3, "lifecycle": "active", "state": "live"}})
         conn = Connection(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/api/brands/7/full-audit")
+            response = browser_client(dashboard.app).post("/api/brands/7/full-audit")
         self.assertEqual(response.status_code, 400)
         self.assertIn("public site URL", response.get_json()["error"])
 

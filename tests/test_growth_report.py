@@ -1,5 +1,8 @@
+from browser_client import browser_client
+import os
 import sys
 import unittest
+import importlib.util
 from pathlib import Path
 from unittest import mock
 
@@ -137,6 +140,124 @@ class GrowthReportTests(unittest.TestCase):
         report = dashboard._normalise_activation_report({"activation": {"schema_version": 1, "status": "available", "totals": {}}})
         self.assertEqual(report["status"], "unavailable")
 
+    def test_activation_retention_counts_survive_normalisation_without_payloads(self):
+        raw = {"activation": {
+            "schema_version": 1, "status": "available",
+            "totals": {key: 0 for key in ["signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served"]},
+            "retention": {"status": "available", "counts": {"notifications_generated": 4, "notifications_read": 2, "notifications_clicked": 1, "unread_notifications": 2, "active_watchlist_jobs": 3, "active_saved_searches": 1, "digest_previews": 2, "email_blocked": 5, "email_failed": 0, "recipients": ["private@example.test"]}, "email_status": "not_connected"},
+        }}
+        report = dashboard._normalise_activation_report(raw)
+        self.assertEqual(report["retention"]["counts"]["notifications_generated"], 4)
+        self.assertEqual(report["retention"]["email_status"], "not_connected")
+        self.assertNotIn("recipients", report["retention"])
+
+    def test_activation_missing_retention_remains_backward_compatible(self):
+        raw = {"activation": {"schema_version": 1, "status": "available", "totals": {key: 0 for key in ["signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served"]}}}
+        report = dashboard._normalise_activation_report(raw)
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["retention"]["status"], "unavailable")
+
+    def test_activation_schema2_preserves_project_stages_and_aggregate_counts(self):
+        raw = {"captured_at": "2026-10-05T10:00:00Z", "activation": {
+            "schema_version": 2, "status": "available",
+            "stage_totals": {"enquiry_received": 0},
+            "stage_labels": {"enquiry_received": "Enquiries received"},
+            "aggregate_counts": {"internal_alerts_confirmed": 0},
+            "window": {"days": 28, "start": "2026-09-08", "end": "2026-10-05"},
+            "coverage": {}, "health": {"status": "available", "last_event_at": "2026-10-05T09:00:00Z"},
+        }}
+        report = dashboard._normalise_activation_report(raw)
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["stage_totals"], {"enquiry_received": 0})
+        self.assertEqual(report["aggregate_counts"], {"internal_alerts_confirmed": 0})
+        self.assertEqual(report["totals"], {"enquiry_received": 0})
+        self.assertNotIn("signups", report["totals"])
+        self.assertEqual(report["coverage"], {})
+
+    def test_activation_schema2_accepts_aggregate_only_and_rejects_malformed_values(self):
+        base = {"schema_version": 2, "status": "available", "stage_totals": {}, "stage_labels": {},
+                "aggregate_counts": {"orders": 3}}
+        report = dashboard._normalise_activation_report({"activation": base})
+        self.assertEqual(report["aggregate_counts"], {"orders": 3})
+        for invalid in (
+            {**base, "aggregate_counts": {"orders": -1}},
+            {**base, "aggregate_counts": {"orders": True}},
+            {**base, "stage_labels": {"unknown": "bad\x7flabel"}},
+            {**base, "status": "mystery"},
+            {**base, "status": []},
+            {**base, "health": {"status": "available\n"}},
+            {**base, "health": {"status": "bad\x7fstatus"}},
+            {**base, "health": {"last_event_at": "bad\x7ftime"}},
+            {**base, "window": {"days": 0}},
+            {**base, "window": {"start": "bad\x7fdate"}},
+        ):
+            self.assertEqual(dashboard._normalise_activation_report({"activation": invalid})["status"], "unavailable")
+        compatible = dashboard._normalise_activation_report({"activation": {
+            **base, "stage_labels": {"unknown": "Future source label"}}})
+        self.assertEqual(compatible["status"], "available")
+
+    def test_schema2_brand_report_uses_generic_labels_without_signup_claims(self):
+        raw = {"captured_at": "2026-10-05T10:00:00Z", "activation": {
+            "schema_version": 2, "status": "available", "stage_totals": {"enquiry_received": 1},
+            "stage_labels": {"enquiry_received": "Enquiries received"},
+            "aggregate_counts": {"internal_alerts_confirmed": 1}, "coverage": {},
+            "health": {"status": "available", "last_event_at": "2026-10-05T09:00:00Z"},
+            "window": {"days": 28, "start": "2026-09-08", "end": "2026-10-05"}}}
+        report = dashboard._normalise_activation_report(raw)
+        with dashboard.app.test_request_context("/"):
+            html = dashboard.render_template(
+                "brand_report.html", brand={"id": 31, "name": "Synthetic"}, activation_report=report,
+                audit_summary={}, audit_history=[], domain="", audit_date_fmt="", capabilities=[],
+                full_audit_run=None, full_audit_children=[], marketing_assessment=None,
+                marketing_assessment_stages=[], brand_properties=[], competitors=[], audit=None,
+                seo_audit=None, seo_summary={}, seo_data={}, suggestions=[], visibility_rows=[],
+                ch_error=False, content_items=[], recent_tasks=[], content_by_suggestion={},
+                task_by_suggestion={}, agent_allowed=False, repo_url=None, project_id=None,
+                measurement_setup={}, seo_cleanup_groups=[], seo_cleanup_batch=None,
+            )
+        section = html.split('id="acquisition-activation-report"', 1)[1]
+        self.assertIn("Enquiries received", section)
+        self.assertIn("Internal Alerts Confirmed", html)
+        self.assertNotIn("aggregate, consented", section)
+        self.assertNotIn("Signups", section)
+
+    def test_schema2_lifecycle_view_uses_project_counts_without_funnel_language(self):
+        report = dashboard._normalise_activation_report({"activation": {
+            "schema_version": 2, "status": "available", "stage_totals": {"enquiry_received": 1},
+            "stage_labels": {"enquiry_received": "Enquiries received"},
+            "aggregate_counts": {"internal_alerts_confirmed": 1}}})
+        context = {"brand": {"id": 31, "name": "Synthetic"}, "profile": {}, "profile_revision": 0,
+                   "properties": {}, "tab": "lifecycle", "tabs": (), "items": [], "audits": [],
+                   "content_items": [], "suggestions": [], "tasks": [], "seo": None, "evidence": {},
+                   "sources": {}, "growth_report": {}, "activation_report": report, "plays": {},
+                   "channels": {}, "schedule_enabled": False, "enquiry_source_configured": False}
+        with dashboard.app.test_request_context("/"):
+            html = dashboard.render_template("marketing_workspace.html", **context)
+        self.assertIn("Enquiries received", html)
+        self.assertIn("Internal Alerts Confirmed", html)
+        self.assertIn("do not establish signups", html)
+
+    def test_core_collector_contract_reaches_dashboard_without_evidence_loss(self):
+        scripts = Path(os.environ.get("AGENCY_SCRIPT_DIR", "/home/agency/core/agency-os/scripts"))
+        sys.path.insert(0, str(scripts))
+        try:
+            spec = importlib.util.spec_from_file_location("seo_measurement_contract", scripts / "seo_measurement.py")
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            collected = module.normalize_activation({
+                "totals": {key: 0 for key in ["signups", "resume_processed", "profile_confirmed", "job_selected", "kit_completed", "kit_evidence_only", "download_served"]},
+                "retention": {"notifications_generated": 7, "notifications_read": 3, "email_status": "not_connected"},
+            })
+        finally:
+            sys.path.pop(0)
+        report = dashboard._normalise_activation_report({"activation": collected})
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["totals"]["kit_evidence_only"], 0)
+        self.assertEqual(report["retention"]["counts"]["notifications_generated"], 7)
+        self.assertEqual(report["retention"]["email_status"], "not_connected")
+
     def test_seo_cleanup_groups_same_rule_and_url(self):
         groups = dashboard._seo_cleanup_groups([
             {"evidence_id": "a", "rule": "missing_description", "url": "https://x.test/a"},
@@ -198,7 +319,7 @@ class GrowthReportTests(unittest.TestCase):
             cursor, conn = Cursor(), None
             conn = Conn(cursor)
             with mock.patch.object(dashboard.models, 'db', return_value=conn):
-                response = dashboard.app.test_client().post('/api/brands/31/seo-cleanup/approve', json={'batch_id': 4, 'plan_hash': 'hash-1'})
+                response = browser_client(dashboard.app).post('/api/brands/31/seo-cleanup/approve', json={'batch_id': 4, 'plan_hash': 'hash-1'})
             self.assertEqual(response.status_code, 201)
             body = response.get_json()
             self.assertEqual(body['task_id'], 88)
@@ -209,12 +330,12 @@ class GrowthReportTests(unittest.TestCase):
             stale_cursor, stale_conn = Cursor(stale=True), None
             stale_conn = Conn(stale_cursor)
             with mock.patch.object(dashboard.models, 'db', return_value=stale_conn):
-                stale = dashboard.app.test_client().post('/api/brands/31/seo-cleanup/approve', json={'batch_id': 4, 'plan_hash': 'hash-1'})
+                stale = browser_client(dashboard.app).post('/api/brands/31/seo-cleanup/approve', json={'batch_id': 4, 'plan_hash': 'hash-1'})
             self.assertEqual(stale.status_code, 409)
             self.assertEqual(stale_conn.commits, 0)
 
     def test_legacy_direct_generation_is_retired(self):
-        response = dashboard.app.test_client().post('/api/suggestions/17/generate')
+        response = browser_client(dashboard.app).post('/api/suggestions/17/generate')
         self.assertEqual(response.status_code, 410)
         self.assertIn('research plan', response.get_json()['error'])
 

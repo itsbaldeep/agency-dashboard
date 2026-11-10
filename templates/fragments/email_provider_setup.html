@@ -1,0 +1,14 @@
+<div class="card">
+  <div class="card-header"><span class="card-title">Email provider connection</span><a class="btn btn-xs" href="https://developers.brevo.com/docs/quickstart" target="_blank" rel="noopener noreferrer">Brevo setup guide ↗</a></div>
+  <p class="subtle mt-2">Store the API key in the brand's private environment file. Enter its reference here. Verification reads account and sender status only; it sends no email.</p>
+  <form id="email-provider-form" class="form-grid mt-2">
+    <label>Provider<select name="provider"><option value="brevo">Brevo</option></select></label>
+    <label>Brand sender address<input name="sender_email" type="email" autocomplete="off" maxlength="254" required></label>
+    <label>Credential file reference<input name="credential_ref" autocomplete="off" maxlength="500" placeholder="Absolute path to the brand-owned private .env" required></label>
+    <label>Environment variable name<input name="credential_name" maxlength="128" pattern="[A-Z][A-Z0-9_]*" value="BREVO_API_KEY" required></label>
+    <div class="full-width workspace-actions"><button class="btn btn-primary" type="submit" disabled>Save connection</button><button id="email-provider-verify" class="btn" type="button" disabled>Verify account and sender</button></div>
+  </form>
+  <div id="email-provider-state" class="subtle mt-2" role="status">Loading connection.</div>
+  <p class="subtle mt-2">An active sender does not prove domain authentication, consent, campaign readiness or sending approval. Domain DNS and audience checks remain separate.</p>
+</div>
+<script src="/static/email-provider.js" defer></script>

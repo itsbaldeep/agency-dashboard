@@ -1,3 +1,4 @@
+from browser_client import browser_client
 import json
 import sys
 import unittest
@@ -79,7 +80,7 @@ class ContentCalendarTests(unittest.TestCase):
         cursor = Cursor(brand=BRAND, task=None)
         conn = Conn(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/analyze", data={"brand_id": "1"})
+            response = browser_client(dashboard.app).post("/content/calendar/analyze", data={"brand_id": "1"})
         self.assertEqual(response.status_code, 201)
         task_sql, task_params = next((sql, params) for sql, params in cursor.calls if "INSERT INTO tasks" in sql)
         self.assertEqual(json.loads(task_params[0])["source"], "content-calendar")
@@ -88,7 +89,7 @@ class ContentCalendarTests(unittest.TestCase):
         duplicate_cursor = Cursor(brand=BRAND, task={"id": 77})
         duplicate_conn = Conn(duplicate_cursor)
         with mock.patch.object(dashboard.models, "db", return_value=duplicate_conn):
-            duplicate = dashboard.app.test_client().post("/content/calendar/analyze", data={"brand_id": "1"})
+            duplicate = browser_client(dashboard.app).post("/content/calendar/analyze", data={"brand_id": "1"})
         self.assertEqual(duplicate.status_code, 200)
         self.assertTrue(duplicate.get_json()["deduplicated"])
 
@@ -96,7 +97,7 @@ class ContentCalendarTests(unittest.TestCase):
         cursor = Cursor(brand=BRAND, task=None)
         conn = Conn(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/generate", data={"brand_id": "1"})
+            response = browser_client(dashboard.app).post("/content/calendar/generate", data={"brand_id": "1"})
         self.assertEqual(response.status_code, 201)
         task_sql, task_params = next((sql, params) for sql, params in cursor.calls if "INSERT INTO tasks" in sql)
         queued = json.loads(task_params[0])
@@ -110,13 +111,13 @@ class ContentCalendarTests(unittest.TestCase):
     def test_generate_deduplicates_only_same_operator_contract(self):
         same = {"id": 81, "params": {"followup": "growth_generate", "queue_research": True, "operator_authorized": True}}
         with mock.patch.object(dashboard.models, "db", return_value=Conn(Cursor(brand=BRAND, task=same))):
-            response = dashboard.app.test_client().post("/content/calendar/generate", data={"brand_id": "1"})
+            response = browser_client(dashboard.app).post("/content/calendar/generate", data={"brand_id": "1"})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["deduplicated"])
 
         ordinary = {"id": 82, "params": {"followup": "growth_plan"}}
         with mock.patch.object(dashboard.models, "db", return_value=Conn(Cursor(brand=BRAND, task=ordinary))):
-            response = dashboard.app.test_client().post("/content/calendar/generate", data={"brand_id": "1"})
+            response = browser_client(dashboard.app).post("/content/calendar/generate", data={"brand_id": "1"})
         self.assertEqual(response.status_code, 409)
         self.assertIn("regular SEO refresh", response.get_json()["error"])
 
@@ -161,7 +162,7 @@ class ContentCalendarTests(unittest.TestCase):
             captured.update(context)
             return "rendered"
         with mock.patch.object(dashboard.models, "db", return_value=Conn(cursor)), mock.patch.object(calendar_routes, "render_template", side_effect=capture):
-            response = dashboard.app.test_client().get("/content/calendar?brand_id=1")
+            response = browser_client(dashboard.app).get("/content/calendar?brand_id=1")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["existing_content"][0]["content_kind"], "help")
         self.assertEqual(captured["plans"][0]["display_status"], "published")
@@ -184,7 +185,7 @@ class ContentCalendarTests(unittest.TestCase):
         cursor = ExistingCursor()
         conn = Conn(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-20"})
+            response = browser_client(dashboard.app).post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-20"})
         self.assertEqual(response.status_code, 201)
         self.assertFalse(response.get_json()["deduplicated"])
         self.assertFalse(any("INSERT INTO tasks" in sql for sql, _ in cursor.calls))
@@ -208,7 +209,7 @@ class ContentCalendarTests(unittest.TestCase):
         cursor = LinkedCursor()
         conn = Conn(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-21"})
+            response = browser_client(dashboard.app).post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-21"})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["deduplicated"])
         self.assertFalse(any("INSERT INTO content_calendar" in sql for sql, _ in cursor.calls))
@@ -226,7 +227,7 @@ class ContentCalendarTests(unittest.TestCase):
             def fetchall(self): return []
         cursor = ExistingCursor()
         with mock.patch.object(dashboard.models, "db", return_value=Conn(cursor)):
-            response = dashboard.app.test_client().post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-08"}, headers={"Accept": "text/html"})
+            response = browser_client(dashboard.app).post("/content/calendar/content/27/schedule", data={"planned_date": "2026-10-08"}, headers={"Accept": "text/html"})
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/content/calendar?brand_id=1")
 
@@ -244,7 +245,7 @@ class ContentCalendarTests(unittest.TestCase):
             def fetchall(self): return []
         cursor = LinkedResearchCursor()
         with mock.patch.object(dashboard.models, "db", return_value=Conn(cursor)):
-            response = dashboard.app.test_client().post("/content/calendar/70/research")
+            response = browser_client(dashboard.app).post("/content/calendar/70/research")
         self.assertEqual(response.status_code, 409)
         self.assertIn("already linked", response.get_json()["error"])
         self.assertFalse(any("INSERT INTO tasks" in sql for sql, _ in cursor.calls))
@@ -258,7 +259,7 @@ class ContentCalendarTests(unittest.TestCase):
                 return None
         conn = Conn(RecommendationCursor())
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/recommendation/5/plan", data={"planned_date": "2026-10-10"})
+            response = browser_client(dashboard.app).post("/content/calendar/recommendation/5/plan", data={"planned_date": "2026-10-10"})
         self.assertEqual(response.status_code, 409)
         self.assertEqual(conn.commits, 0)
 
@@ -275,11 +276,11 @@ class ContentCalendarTests(unittest.TestCase):
                 return None
         conn = Conn(RecommendationCursor())
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/recommendation/5/plan", data={"planned_date": "2026-10-10"})
+            response = browser_client(dashboard.app).post("/content/calendar/recommendation/5/plan", data={"planned_date": "2026-10-10"})
         self.assertEqual(response.status_code, 409)
         self.assertIn("three items", response.get_json()["error"])
     def test_create_rejects_invalid_fields_without_database(self):
-        response = dashboard.app.test_client().post("/content/calendar", data={"brand_id": "1", "title": "", "success_metric": "bad"})
+        response = browser_client(dashboard.app).post("/content/calendar", data={"brand_id": "1", "title": "", "success_metric": "bad"})
         self.assertEqual(response.status_code, 400)
 
     def test_create_validates_evidence_audit_and_escapes_when_rendered(self):
@@ -287,7 +288,7 @@ class ContentCalendarTests(unittest.TestCase):
         conn = Conn(cursor)
         data = {"brand_id": "1", "title": "<Guide>", "target_keyword": "keyword", "audience": "Readers", "hypothesis": "A useful test", "success_metric": "gsc_clicks", "planned_date": "2026-09-30", "evidence_audit_id": "7", "evidence_note": "<note>"}
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar", data=data)
+            response = browser_client(dashboard.app).post("/content/calendar", data=data)
         self.assertEqual(response.status_code, 201)
         self.assertEqual(conn.commits, 1)
         insert = next(params for sql, params in cursor.calls if "INSERT INTO content_calendar" in sql)
@@ -301,12 +302,12 @@ class ContentCalendarTests(unittest.TestCase):
         plan = {**PLAN, "competitor_urls": []}
         conn = Conn(Cursor(brand=BRAND, plan=plan))
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/19/research")
+            response = browser_client(dashboard.app).post("/content/calendar/19/research")
         self.assertEqual(response.status_code, 400)
         plan = {**PLAN, "task_id": 44, "competitor_urls": ["https://example.com"]}
         conn = Conn(Cursor(brand=BRAND, plan=plan))
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/19/research")
+            response = browser_client(dashboard.app).post("/content/calendar/19/research")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["deduplicated"])
 
@@ -314,17 +315,17 @@ class ContentCalendarTests(unittest.TestCase):
         cancelled = {**PLAN, "status": "cancelled", "competitor_urls": ["https://example.com"]}
         conn = Conn(Cursor(brand=BRAND, plan=cancelled))
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            self.assertEqual(dashboard.app.test_client().post("/content/calendar/19/research").status_code, 409)
+            self.assertEqual(browser_client(dashboard.app).post("/content/calendar/19/research").status_code, 409)
         conn = Conn(Cursor(brand=None))
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            self.assertEqual(dashboard.app.test_client().post("/content/calendar", data={"brand_id": "99", "title": "x", "target_keyword": "x", "audience": "x", "hypothesis": "x", "success_metric": "gsc_clicks", "planned_date": "2026-09-30"}).status_code, 404)
+            self.assertEqual(browser_client(dashboard.app).post("/content/calendar", data={"brand_id": "99", "title": "x", "target_keyword": "x", "audience": "x", "hypothesis": "x", "success_metric": "gsc_clicks", "planned_date": "2026-09-30"}).status_code, 404)
 
     def test_research_queue_and_cancel_commit(self):
         plan = {**PLAN, "competitor_urls": ["https://example.com"]}
         cursor = Cursor(brand=BRAND, plan=plan)
         conn = Conn(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/19/research")
+            response = browser_client(dashboard.app).post("/content/calendar/19/research")
         self.assertEqual(response.status_code, 201)
         self.assertEqual(conn.commits, 1)
         task_params = next(params[0] for sql, params in cursor.calls if "INSERT INTO tasks" in sql)
@@ -332,7 +333,7 @@ class ContentCalendarTests(unittest.TestCase):
 
         conn = Conn(Cursor(brand=BRAND, plan=PLAN))
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/19/cancel")
+            response = browser_client(dashboard.app).post("/content/calendar/19/cancel")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(conn.commits, 1)
 
@@ -341,7 +342,7 @@ class ContentCalendarTests(unittest.TestCase):
         cursor = Cursor(brand=BRAND, plan=plan)
         conn = Conn(cursor)
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().post("/content/calendar/19/sources", json={"competitor_urls": ["https://one.example/path", "https://two.example"]})
+            response = browser_client(dashboard.app).post("/content/calendar/19/sources", json={"competitor_urls": ["https://one.example/path", "https://two.example"]})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(conn.commits, 1)
         update = next(params for sql, params in cursor.calls if "UPDATE content_calendar SET competitor_urls" in sql)
@@ -349,17 +350,17 @@ class ContentCalendarTests(unittest.TestCase):
 
     def test_sources_update_rejects_invalid_url_and_queued_or_cancelled_plan(self):
         with mock.patch.object(dashboard.models, "db") as db:
-            response = dashboard.app.test_client().post("/content/calendar/19/sources", json={"competitor_urls": ["http://example.com"]})
+            response = browser_client(dashboard.app).post("/content/calendar/19/sources", json={"competitor_urls": ["http://example.com"]})
         self.assertEqual(response.status_code, 400)
         for status in ("research_queued", "cancelled"):
             conn = Conn(Cursor(brand=BRAND, plan={**PLAN, "status": status}))
             with mock.patch.object(dashboard.models, "db", return_value=conn):
-                response = dashboard.app.test_client().post("/content/calendar/19/sources", json={"competitor_urls": ["https://example.com"]})
+                response = browser_client(dashboard.app).post("/content/calendar/19/sources", json={"competitor_urls": ["https://example.com"]})
             self.assertEqual(response.status_code, 409)
     def test_missing_migration_is_graceful(self):
         conn = Conn(Cursor(raise_table=True))
         with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = dashboard.app.test_client().get("/content/calendar")
+            response = browser_client(dashboard.app).get("/content/calendar")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"not installed yet", response.data)
 

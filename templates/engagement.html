@@ -1,89 +1,73 @@
 {% extends "base.html" %}
 {% block content %}
-<a href="/engagements" style="font-size:12px;color:var(--text-muted)">&larr; Engagements</a>
-<div class="page-header">
-  <h1>{{ eng.client_name or eng.name }}</h1>
-  <div class="sub">
-    <span class="badge {{ eng.onboarding }}">{{ eng.onboarding.replace('_',' ') }}</span>
-    <span class="badge badge-{{ eng.client_status }}">{{ eng.client_status }}</span>
-    {% if eng.project_state %}<span class="badge {{ eng.project_state }}">{{ eng.project_state }}</span>{% endif %}
-    {% if eng.classification %}<span class="badge badge-purple">{{ eng.classification }}</span>{% endif %}
+<div class="workspace-back"><a href="/engagements">&larr; Brands</a></div>
+<div class="page-header workspace-header">
+  <div>
+    <h1>{{ eng.client_name or eng.name }}</h1>
+    <div class="sub">Marketing workspace{% if eng.domain %} · <span class="mono">{{ eng.domain }}</span>{% endif %}</div>
+  </div>
+  <div class="workspace-actions">
+    {% if eng.brand_id %}<a class="btn btn-primary" href="/brands/{{ eng.brand_id }}">Open brand workspace</a>{% endif %}
     {% if eng.lifecycle %}<span class="badge {{ eng.lifecycle }}">{{ eng.lifecycle.replace('_',' ') }}</span>{% endif %}
-    {% if eng.access_tier != '0' %}<span class="badge badge-blue">Tier {{ eng.access_tier }}</span>{% endif %}
   </div>
 </div>
 
-<div class="section-tabs">
-  <a href="#" class="active" onclick="return switchTab(event,'overview')">Overview</a>
-  {% if eng.has_code %}<a href="#" onclick="return switchTab(event,'code')">Code &amp; Deploy</a>{% endif %}
-  <a href="#" onclick="return switchTab(event,'marketing')">Marketing</a>
-  <a href="#" onclick="return switchTab(event,'activity')">Activity</a>
+<div class="workspace-status gap-2" aria-label="Brand status">
+  {% if eng.onboarding %}<span class="badge {{ eng.onboarding }}">{{ eng.onboarding.replace('_',' ') }}</span>{% endif %}
+  {% if eng.client_status %}<span class="badge badge-{{ eng.client_status }}">{{ eng.client_status }}</span>{% endif %}
+  {% if eng.project_state %}<span class="badge {{ eng.project_state }}">{{ eng.project_state.replace('_',' ') }}</span>{% endif %}
+  {% if eng.classification %}<span class="badge badge-purple">{{ eng.classification }}</span>{% endif %}
+  {% if eng.access_tier != '0' %}<span class="badge badge-blue">Tier {{ eng.access_tier }}</span>{% endif %}
 </div>
 
-<div id="tab-overview" class="tab-content">
-  {% if eng.intake_params and eng.intake_params is mapping %}
-  <div class="card">
-    <div class="card-title mb-2">Intake</div>
-    <div class="gap-2">
-      {% for k,v in eng.intake_params.items() %}
-      <span class="subtle">{{ k }}: <strong>{{ v }}</strong></span>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
+<div class="section-tabs" role="tablist" aria-label="Brand workspace sections">
+  <a href="#" class="active" role="tab" aria-selected="true" onclick="return switchTab(event,'overview')">Overview</a>
+  <a href="#" role="tab" aria-selected="false" onclick="return switchTab(event,'marketing')">Marketing</a>
+  <a href="#" role="tab" aria-selected="false" onclick="return switchTab(event,'activity')">Activity</a>
+</div>
 
+<div id="tab-overview" class="tab-content" role="tabpanel">
   {% if eng.lifecycle == 'soft_parked' %}
-  <div class="card">
+  <div class="card status-card">
     <div class="card-title mb-2">Soft parked</div>
-    <p class="subtle">Live services and public routes are stopped. Source, data volumes, and the recovery reference are retained. Resume is intentionally not one-click until this engagement has a tested start/health manifest.</p>
+    <p class="subtle">Live services and public routes are stopped. Source, data volumes, and the recovery reference are retained. Resume remains operator controlled until a tested start and health manifest exists.</p>
     {% if eng.recovery_ref %}<span class="mono subtle">{{ eng.recovery_ref }}</span>{% endif %}
   </div>
   {% endif %}
 
-  {% if eng.has_code and eng.project_id %}
+  {% if eng.intake_params and eng.intake_params is mapping %}
   <div class="card">
-    <div class="card-title mb-2">Services &amp; Deploy</div>
-    <div id="code-overview" hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/code" hx-trigger="load" hx-swap="innerHTML">
-      <div class="skel skel-h"></div><div class="skel skel-s"></div>
+    <div class="card-header"><span class="card-title">Brand intake</span><span class="badge badge-dim">source record</span></div>
+    <div class="gap-2">
+      {% for k,v in eng.intake_params.items() %}<span class="subtle">{{ k }}: <strong>{{ v }}</strong></span>{% endfor %}
     </div>
   </div>
   {% endif %}
 
   {% if eng.brand_id %}
   <div class="card">
-    <div class="card-title mb-2">Marketing</div>
+    <div class="card-header">
+      <span class="card-title">Marketing pulse</span>
+      <a class="btn btn-xs" href="/brands/{{ eng.brand_id }}">Brand workspace &rarr;</a>
+    </div>
     <div id="mktg-overview" hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/marketing" hx-trigger="load" hx-swap="innerHTML">
       <div class="skel skel-h"></div><div class="skel skel-s"></div>
     </div>
   </div>
-  {% endif %}
-
-  {% if not eng.has_code and not eng.brand_id %}
-  <div class="card"><p class="empty">Loading engagement data...</p></div>
-  {% endif %}
-</div>
-
-<div id="tab-code" class="tab-content" style="display:none">
-  {% if eng.has_code and eng.project_id %}
-  <div hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/code" hx-trigger="load" hx-swap="innerHTML">
-    <div class="card"><p class="empty">Loading...</p></div>
-  </div>
   {% else %}
-  <div class="card"><p class="empty">No code/deploy for this engagement</p></div>
+  <div class="card"><p class="empty">No marketing brand is linked to this engagement yet.</p></div>
   {% endif %}
 </div>
 
-<div id="tab-marketing" class="tab-content" style="display:none">
+<div id="tab-marketing" class="tab-content" role="tabpanel" hidden>
   {% if eng.brand_id %}
   <div hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/marketing" hx-trigger="load" hx-swap="innerHTML">
-    <div class="card"><p class="empty">Loading...</p></div>
+    <div class="card"><p class="empty">Loading marketing data...</p></div>
   </div>
-  {% else %}
-  <div class="card"><p class="empty">No marketing data for this engagement</p></div>
-  {% endif %}
+  {% else %}<div class="card"><p class="empty">No marketing data for this engagement.</p></div>{% endif %}
 </div>
 
-<div id="tab-activity" class="tab-content" style="display:none">
+<div id="tab-activity" class="tab-content" role="tabpanel" hidden>
   <div hx-get="/engagements/{{ eng.ref_type }}/{{ eng.ref_id }}/activity" hx-trigger="load" hx-swap="innerHTML">
     <div class="card"><p class="empty">Loading activity...</p></div>
   </div>
@@ -92,17 +76,16 @@
 <script>
 function switchTab(e, name) {
   e.preventDefault();
-  document.querySelectorAll('.tab-content').forEach(function(t){ t.style.display='none'; });
-  var tab = document.getElementById('tab-'+name);
-  tab.style.display = 'block';
-  tab.querySelectorAll('[hx-get][hx-trigger="load"]').forEach(function(el) {
-    if (!el.hasAttribute('data-loaded')) {
-      el.setAttribute('data-loaded', '');
-      htmx.process(el);
-    }
+  document.querySelectorAll('.tab-content').forEach(function(panel) { panel.hidden = panel.id !== 'tab-' + name; });
+  document.querySelectorAll('.section-tabs [role="tab"]').forEach(function(tab) {
+    var selected = tab.getAttribute('onclick').indexOf("'" + name + "'") !== -1;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', selected ? 'true' : 'false');
   });
-  document.querySelectorAll('.section-tabs a').forEach(function(a){ a.classList.remove('active'); });
-  e.target.classList.add('active');
+  var panel = document.getElementById('tab-' + name);
+  panel.querySelectorAll('[hx-get][hx-trigger="load"]').forEach(function(el) {
+    if (!el.hasAttribute('data-loaded')) { el.setAttribute('data-loaded', ''); htmx.process(el); }
+  });
   return false;
 }
 </script>
