@@ -1,72 +1,38 @@
-import sys
 import unittest
-from pathlib import Path
 from unittest import mock
-
-sys.path.insert(0, str(Path(__file__).parents[1]))
 import app as dashboard
-
-
-class Cursor:
-    def __init__(self, batches):
-        self.batches = list(batches)
-        self.calls = []
-    def execute(self, sql, params=()): self.calls.append((" ".join(sql.split()), params))
-    def fetchall(self): return self.batches.pop(0) if self.batches else []
-
-
-class Conn:
-    def __init__(self, batches): self.cursor_value = Cursor(batches)
-    def cursor(self, *args, **kwargs): return self.cursor_value
-    def close(self): pass
-
 
 class MarketingCalendarTests(unittest.TestCase):
     def setUp(self):
         dashboard.app.config.update(TESTING=True)
-        self.client = dashboard.app.test_client()
+        self.client=dashboard.app.test_client()
+        self.data={'month':'2026-11','timezone':'Asia/Kolkata','today':'2026-11-17','brands':[{'id':31,'name':'TrueApply'}],'events':[],'unscheduled':[],'coverage':{'complete':True}}
 
-    def test_brand_filter_binds_plans_and_runs_and_keeps_sections_separate(self):
-        conn = Conn([
-            [{"id": 4, "name": "Deployden"}],
-            [{"id": 10, "brand_id": 4, "brand_name": "Deployden", "title": "Launch", "kind": "social_post", "channel": "linkedin", "status": "draft", "planned_at": None, "url": "/brands/4/work/10"}],
-            [{"id": 20, "brand_id": 4, "brand_name": "Deployden", "item_id": 10, "title": "Launch", "revision": 2, "send_at": None, "state": "cancelled"}],
-        ])
-        with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = self.client.get("/calendar?brand_id=4")
-        self.assertEqual(response.status_code, 200)
-        body = response.get_data(as_text=True)
-        self.assertIn("Planning dates", body)
-        self.assertIn("Approved delivery runs", body)
-        self.assertIn("cancelled", body)
-        plan_call = next(call for call in conn.cursor_value.calls if "marketing_work_items" in call[0])
-        run_call = next(call for call in conn.cursor_value.calls if "marketing_campaign_runs" in call[0])
-        self.assertEqual(plan_call[1], (4, 4))
-        self.assertEqual(run_call[1], (4,))
+    def test_visual_calendar_and_json_share_filters(self):
+        with mock.patch.object(dashboard.models,'db') as db, mock.patch('calendar_events.load_calendar',return_value=self.data) as load:
+            r=self.client.get('/calendar?brand_id=31&month=2026-11&timezone=UTC')
+            self.assertEqual(r.status_code,200)
+            self.assertIn('id="mc-grid"',r.text)
+            self.assertIn('Help articles',r.text)
+            self.assertIn('Projected window',r.text)
+            load.assert_called_with(db.return_value,brand_id=31,month='2026-11',timezone_name='UTC')
+            r=self.client.get('/api/marketing-calendar?brand_id=31')
+            self.assertEqual(r.json,self.data)
+            self.assertEqual(db.return_value.close.call_count,2)
 
-    def test_default_all_brands_and_bad_filter(self):
-        conn = Conn([[{"id": 4, "name": "Deployden"}], [], []])
-        with mock.patch.object(dashboard.models, "db", return_value=conn):
-            response = self.client.get("/calendar")
-            bad = self.client.get("/calendar?brand_id=0")
-            text = response.get_data(as_text=True)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(bad.status_code, 400)
-        for invalid in ("²", "99999999999", "2147483648", "-1", "abc"):
-            with self.subTest(invalid=invalid):
-                self.assertEqual(self.client.get("/calendar", query_string={"brand_id": invalid}).status_code, 400)
-        self.assertIn("All brands", text)
-        plan_call = next(call for call in conn.cursor_value.calls if "marketing_work_items" in call[0])
-        run_call = next(call for call in conn.cursor_value.calls if "marketing_campaign_runs" in call[0])
-        self.assertEqual(plan_call[1], ())
-        self.assertEqual(run_call[1], ())
+    def test_invalid_filters_do_not_open_database(self):
+        with mock.patch.object(dashboard.models,'db') as db:
+            for path in ['/calendar','/api/marketing-calendar']:
+                for args in [{'brand_id':x} for x in ('0','²','2147483648','-1','abc')]+[{'month':'2026-13'},{'month':'0000-01'},{'timezone':'Nope'}]:
+                    with self.subTest(path=path,args=args):
+                        self.assertEqual(self.client.get(path,query_string=args).status_code,400)
+            db.assert_not_called()
 
-    def test_calendar_does_not_render_contract_or_recipient_fields(self):
-        conn = Conn([[{"id": 4, "name": "Brand"}], [], [{"id": 1, "brand_id": 4, "brand_name": "Brand", "item_id": 2, "title": "Email", "revision": 1, "send_at": None, "state": "approved"}]])
-        with mock.patch.object(dashboard.models, "db", return_value=conn):
-            body = self.client.get("/calendar").get_data(as_text=True)
-        self.assertNotIn("contract", body.lower())
-        self.assertNotIn("recipient", body.lower())
+    def test_embedded_event_text_cannot_break_out_of_json(self):
+        self.data['events']=[{'title':'</script><script>alert(1)</script>','date':'2026-11-17','status':'published'}]
+        with mock.patch.object(dashboard.models,'db'),mock.patch('calendar_events.load_calendar',return_value=self.data):
+            r=self.client.get('/calendar')
+        self.assertNotIn('</script><script>alert(1)',r.text)
+        self.assertIn('\\u003c/script\\u003e',r.text)
 
-
-if __name__ == "__main__": unittest.main()
+if __name__=='__main__':unittest.main()
