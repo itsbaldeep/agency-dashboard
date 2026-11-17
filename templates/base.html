@@ -1,75 +1,56 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agency OS{% if title %} — {{ title }}{% endif %}</title>
+<title>Deployden Marketing{% if title %}: {{ title }}{% endif %}</title>
 <script src="/static/htmx.min.js"></script>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/v2.css">
 </head>
 <body>
 
+<a class="skip-link" href="#main">Skip to main content</a>
+
 <nav class="sidebar" id="sidebar">
   <div class="sidebar-brand">
-    <div class="logo">A</div>
-    <span>Agency OS</span>
+    <div class="logo" aria-hidden="true">D</div>
+    <span>Deployden <small>Marketing OS</small></span>
   </div>
   <div class="sidebar-nav">
-    <div class="sidebar-section">Core</div>
-    <a href="/dashboard" class="{% if active == 'dashboard' %}active{% endif %}">
-      <span class="nav-icon">&#9632;</span> Dashboard
-    </a>
-    <a href="/engagements" class="{% if active == 'engagements' %}active{% endif %}">
-      <span class="nav-icon">&#9670;</span> Engagements
+    <div class="sidebar-section">Workspace</div>
+    <a href="/dashboard" class="{% if active in ['dashboard','brands','engagements'] %}active{% endif %}">
+      <span class="nav-icon" aria-hidden="true">&#9632;</span> Portfolio
     </a>
     <a href="/content" class="{% if active == 'content' %}active{% endif %}">
-      <span class="nav-icon">&#9998;</span> Content
+      <span class="nav-icon" aria-hidden="true">&#9998;</span> Editorial
     </a>
-    <a href="/competitors" class="{% if active == 'competitors' %}active{% endif %}">
-      <span class="nav-icon">&#9783;</span> Competitors
+    <a href="/calendar" class="{% if active == 'calendar' %}active{% endif %}">
+      <span class="nav-icon" aria-hidden="true">&#9636;</span> Calendar
+    </a>
+    <a href="/reports" class="{% if active == 'reports' %}active{% endif %}">
+      <span class="nav-icon" aria-hidden="true">&#9776;</span> Reports
     </a>
     <a href="/tasks" class="{% if active == 'tasks' %}active{% endif %}">
-      <span class="nav-icon">&#10003;</span> Tasks
+      <span class="nav-icon" aria-hidden="true">&#10003;</span> Work queue
     </a>
 
-    <div class="sidebar-section">Operations</div>
+    <div class="sidebar-section admin-section">Administration</div>
     <a href="/alerts" class="{% if active == 'alerts' %}active{% endif %}">
-      <span class="nav-icon">&#9888;</span> Alerts
+      <span class="nav-icon" aria-hidden="true">&#9888;</span> Alerts
       {% if nav_alert_count %}<span class="nav-count">{{ nav_alert_count }}</span>{% endif %}
     </a>
     <a href="/operations" class="{% if active == 'operations' %}active{% endif %}">
-      <span class="nav-icon">&#9881;</span> Operations
+      <span class="nav-icon" aria-hidden="true">&#9881;</span> Operations
     </a>
-    <a href="/health" class="{% if active == 'health' %}active{% endif %}">
-      <span class="nav-icon">&#9829;</span> Health
-    </a>
-    <a href="/dev-tasks" class="{% if active == 'dev-tasks' %}active{% endif %}">
-      <span class="nav-icon">&#9003;</span> Dev Tasks
-    </a>
-
-    <div class="sidebar-section">Analytics</div>
-    <a href="/spend" class="{% if active == 'spend' %}active{% endif %}">
-      <span class="nav-icon">&#36;</span> Spend
-    </a>
-    <a href="/resources" class="{% if active == 'resources' %}active{% endif %}">
-      <span class="nav-icon">&#9776;</span> Resources
-    </a>
-
-    <div class="sidebar-section">System</div>
-    <a href="/tools" class="{% if active == 'tools' %}active{% endif %}">
-      <span class="nav-icon">&#8853;</span> Tools
-    </a>
-    <a href="/projects" class="{% if active == 'projects' %}active{% endif %}">
-      <span class="nav-icon">&#8999;</span> Projects
-    </a>
-    <a href="/system-map" class="{% if active == 'system-map' %}active{% endif %}">
-      <span class="nav-icon">&#8704;</span> System Map
+    <a href="/administration" class="{% if active == 'administration' %}active{% endif %}">
+      <span class="nav-icon" aria-hidden="true">&#9881;</span> Administration
     </a>
   </div>
 </nav>
 
-<button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()">&#9776;</button>
-<button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle theme">&#9790;</button>
+<button class="menu-toggle" id="menuToggle" type="button" aria-controls="sidebar" aria-expanded="false" onclick="toggleSidebar()"><span aria-hidden="true">&#9776;</span><span class="sr-only">Open navigation</span></button>
+<button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false" onclick="toggleTheme()" title="Use dark theme"><span aria-hidden="true">&#9790;</span><span class="sr-only">Toggle color theme</span></button>
 
 <div class="main" id="main">
   {% block content %}{{ content|safe }}{% endblock %}
@@ -77,10 +58,9 @@
 
 <script>
 (function() {
-  var t = localStorage.getItem('theme') || 'dark';
+  var t = localStorage.getItem('theme') || 'light';
   document.documentElement.setAttribute('data-theme', t);
-  if (t === 'light') document.getElementById('themeToggle').innerHTML = '&#9790;';
-  else document.getElementById('themeToggle').innerHTML = '&#9788;';
+  updateThemeControl(t);
 })();
 function toggleTheme() {
   var h = document.documentElement;
@@ -88,16 +68,25 @@ function toggleTheme() {
   var next = cur === 'dark' ? 'light' : 'dark';
   h.setAttribute('data-theme', next);
   localStorage.setItem('theme', next);
-  document.getElementById('themeToggle').innerHTML = next === 'light' ? '&#9788;' : '&#9790;';
+  updateThemeControl(next);
+}
+function updateThemeControl(theme) {
+  var control = document.getElementById('themeToggle');
+  control.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+  control.title = theme === 'dark' ? 'Use light theme' : 'Use dark theme';
+  control.querySelector('[aria-hidden="true"]').textContent = theme === 'dark' ? '☀' : '☾';
 }
 function toggleSidebar() {
-  document.getElementById('sidebar').classList.toggle('open');
+  var sidebar = document.getElementById('sidebar');
+  var open = sidebar.classList.toggle('open');
+  document.getElementById('menuToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 document.addEventListener('click', function(e) {
   var s = document.getElementById('sidebar');
   var t = document.getElementById('menuToggle');
   if (window.innerWidth <= 820 && !s.contains(e.target) && !t.contains(e.target)) {
     s.classList.remove('open');
+    t.setAttribute('aria-expanded', 'false');
   }
 });
 function setPoll(el, target, url) {

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><div><h1>Edit content</h1><p class="subtle">Preview your changes before saving. Saving does not publish.</p></div><a class="btn" href="/content/{{ item_id }}/preview">Back to preview</a></div>
+<div id="edit-status" role="status" aria-live="polite">Loading content…</div>
+<form id="text-editor" hidden>
+  <section class="card"><h2>Article details</h2>
+    <label>Title<input id="edit-title" type="text" maxlength="240" required style="width:100%"></label>
+    <div id="edit-metadata"></div>
+  </section>
+  <section class="card mt-2"><h2 id="blocks-title">Content</h2><div id="edit-blocks"></div></section>
+  <section class="card mt-2"><label>What changed?<textarea id="edit-note" maxlength="2000" rows="3" required style="width:100%" placeholder="Describe the corrections and evidence checked"></textarea></label>
+    <div class="workspace-actions mt-2"><button id="preview-edit" class="btn" type="button">Preview changes</button><button id="save-edit" class="btn btn-primary" type="submit" disabled>Save reviewed changes</button></div>
+  </section>
+</form>
+<section id="review-panel" class="card mt-2" hidden><h2>Review changes</h2><p id="review-quality"></p><div id="review-html"></div></section>
+<script id="text-editor-context" type="application/json">{{ {'id': item_id}|tojson }}</script>
+<script src="/static/content-text-edit.js" defer></script>
+{% endblock %}

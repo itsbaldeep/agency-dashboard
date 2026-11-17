@@ -1,0 +1,14 @@
+<div class="card">
+  <div class="card-title">Campaign audience and delivery source</div>
+  <p class="subtle mt-2">Connect the brand's private application or CRM adapter. It owns recipients, consent, suppressions and the delivery outbox. The dashboard stores campaign copy, approvals and aggregate receipts.</p>
+  <form id="campaign-source-form" class="form-grid mt-2">
+    <label>Local source origin<input name="base_url" placeholder="http://127.0.0.1:8100" required maxlength="200"></label>
+    <label>Private credential file reference<input name="credential_ref" placeholder="Absolute path inside the brand's credential root" required maxlength="500"></label>
+    <label>Environment variable name<input name="credential_name" value="CAMPAIGN_ADAPTER_TOKEN" required pattern="[A-Z][A-Z0-9_]*" maxlength="128"></label>
+    <div><button class="btn btn-primary" type="submit" disabled>Save source reference</button></div>
+  </form>
+  <div id="campaign-source-state" class="subtle mt-2" role="status">Loading source configuration.</div>
+  <p class="subtle mt-2">The adapter must support frozen audience previews, exact approved dispatch and receipt reconciliation. Saving a reference creates no account, installs no endpoint and authorizes no delivery. If the application lacks an adapter, its developer must add one through Codex.</p>
+  <a class="btn btn-sm mt-2" href="/brands/{{brand.id}}/lifecycle">Campaign drafts and results</a>
+</div>
+<script src="/static/campaign-source.js" defer></script>

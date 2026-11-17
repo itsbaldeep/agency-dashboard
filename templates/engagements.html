@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h1>Engagements</h1>
-  <div class="sub">Unified view of all clients, projects, and brands</div>
+  <h1>Brand onboarding</h1>
+  <div class="sub">Register a brand website and gather evidence before planning marketing.</div>
 </div>
 
 <div class="card" style="border-color:var(--accent)">
   <div class="card-header">
-    <span class="card-title">New Engagement</span>
+    <span class="card-title">Add marketing brand</span>
     <span class="subtle">Name + URL is enough to start — everything else is optional.</span>
   </div>
   <div class="onboard-form" style="grid-template-columns:1fr">
@@ -16,8 +16,8 @@
         <div class="subtle mb-2">Type</div>
         <select id="onboard-type" onchange="updateOnboardForm()">
           <option value="marketing_only">Marketing Only (audit)</option>
-          <option value="existing_code_marketing">Existing Code + Marketing</option>
-          <option value="clean_slate">Clean Slate (new project)</option>
+
+
         </select>
       </div>
       <div>
