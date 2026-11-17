@@ -106,5 +106,15 @@ class CalendarEventsTests(unittest.TestCase):
         q = {e["id"]: e for e in dec["events"] if e["status"] == "projected" and e["date"].startswith("2026-12-")}
         self.assertTrue(set(n).issubset(set(q))); self.assertIn("Help 26", {e["title"] for e in nov["events"]}); self.assertNotIn("Stale", {e["title"] for e in nov["events"]})
 
+    def test_shifted_window_cannot_overfill_following_day(self):
+        d=base();d['brands']=[{'id':3,'name':'True','project_id':30}]
+        d['pub']=[{'task_id':1,'content_id':2,'title':'Previous','brand_id':3,'structured':{},'result_ref':{'status':'published','post_id':'old','published_at':'2026-11-11T00:10:00Z'}}]
+        d['plans']=[{'plan_id':12,'brand_id':3,'title':'Help already planned','planned_date':'2026-11-18','status':'planned','structured':{'content_kind':'help'}}]
+        config={'brands':{'3':{'enabled':True,'project_id':30,'calendar':{'projection_days':2,'slots':[{'kind':'article','weekday':1,'time_utc':'23:45'}],'weekly_limits':{'article':1},'max_per_day':1}}}}
+        with tempfile.NamedTemporaryFile(mode='w+',suffix='.json') as f:
+            json.dump(config,f);f.flush()
+            out=load_calendar(Conn(d),month='2026-11',timezone_name='UTC',now=datetime(2026,11,17,tzinfo=timezone.utc),config_path=f.name)
+        self.assertFalse(any(e['status']=='projected' for e in out['events']))
+
 
 if __name__ == "__main__": unittest.main()
