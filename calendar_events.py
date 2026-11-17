@@ -190,6 +190,8 @@ def load_calendar(conn, brand_id=None, month=None, timezone_name="Asia/Kolkata",
                     expiry = sorted(prior)[len(prior)-limit] + timedelta(days=7)
                     if expiry > at + timedelta(hours=1) or len(counts_at(expiry)) >= limit: continue
                     at = expiry
+                    shifted_count = sum(1 for x in accounting + projected if x.get("brand_id") == b.get("id") and x.get("kind") in ("article", "help") and x.get("status") in ("published", "planned", "scheduled", "projected") and x.get("date") == at.date().isoformat())
+                    if shifted_count >= maxday: continue
                 candidate = pending[kind].pop(0) if pending[kind] else None; title = (candidate or {}).get("title") or ("Help slot: topic to be selected" if kind == "help" else "Article slot: topic to be selected")
                 projected.append(_base("projection-%s-%s-%s" % (b.get("id"), day.isoformat(), kind), title, b.get("id"), b.get("name"), kind, "blog", "projected", at, "projected", "/content/"+str(candidate["id"])+"/preview" if candidate else "/content/calendar?brand_id="+str(b.get("id")), None, "owned_marketing_projection", "Publication window, pending quality checks; not a scheduled publish")); day_count += 1
     for e in projected: add(e)
