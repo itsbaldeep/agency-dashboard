@@ -616,48 +616,40 @@ def upload_ui_asset(brand_id,item_id):
         cur.execute("UPDATE marketing_work_items SET brief=%s,state='draft',revision=revision+1,updated_at=now() WHERE id=%s AND brand_id=%s",(json.dumps(brief),item_id,brand_id));conn.commit();return jsonify(ok=True)
     finally:conn.close()
 
+def _calendar_response(as_json=False):
+    from calendar_events import load_calendar
+    raw = request.args.get('brand_id', '')
+    if raw and not (raw.isascii() and raw.isdigit() and len(raw) <= 10 and 0 < int(raw) <= 2147483647):
+        return jsonify(ok=False, error='brand_id must be a positive integer'), 400
+    brand_id = int(raw) if raw else None
+    month = request.args.get('month')
+    zone = request.args.get('timezone', 'Asia/Kolkata')
+    # Validate before opening a database connection.
+    from calendar_events import _month, _zone
+    try:
+        if month is not None: _month(month)
+        _zone(zone)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    conn = models.db()
+    try:
+        data = load_calendar(conn, brand_id=brand_id, month=month, timezone_name=zone)
+        if as_json: return jsonify(data)
+        return render_template('marketing_calendar.html', calendar=data, brand_filter=brand_id,
+                               title='Marketing calendar', active='calendar')
+    finally:
+        conn.close()
+
+
 @marketing.route('/calendar')
 def marketing_calendar():
-    raw_brand = request.args.get('brand_id')
-    if raw_brand is None or raw_brand == '':
-        brand_filter = None
-    elif raw_brand.isascii() and raw_brand.isdigit() and len(raw_brand) <= 10 and 0 < int(raw_brand) <= 2147483647:
-        brand_filter = int(raw_brand)
-    else:
-        return jsonify(ok=False, error='brand_id must be a positive integer'), 400
-    conn=models.db()
-    try:
-        cur=conn.cursor()
-        cur.execute('SELECT id,name FROM brands ORDER BY name,id LIMIT 250')
-        brands = cur.fetchall()
-        plan_where = "WHERE m.state<>'archived' AND m.planned_at IS NOT NULL"
-        plan_args = []
-        if brand_filter is not None:
-            plan_where += ' AND m.brand_id=%s'; plan_args.append(brand_filter)
-        cur.execute('''SELECT m.id,m.brand_id,b.name AS brand_name,m.title,m.kind,m.channel,m.state AS status,m.planned_at AS planned_at,
-            '/brands/'||m.brand_id||'/work/'||m.id AS url FROM marketing_work_items m JOIN brands b ON b.id=m.brand_id
-            ''' + plan_where + '''
-            UNION ALL SELECT c.id,c.brand_id,b.name,c.title,'editorial','blog',c.status,c.planned_date::timestamptz,
-            '/content/calendar?brand_id='||c.brand_id FROM content_calendar c JOIN brands b ON b.id=c.brand_id
-            WHERE c.status<>'cancelled' ''' + (' AND c.brand_id=%s' if brand_filter is not None else '') + '''
-            ORDER BY planned_at,brand_name,title LIMIT 250''', tuple(plan_args + plan_args))
-        plans = cur.fetchall()
-        run_where = 'WHERE 1=1'
-        run_args = []
-        if brand_filter is not None:
-            run_where += ' AND r.brand_id=%s'; run_args.append(brand_filter)
-        cur.execute('''SELECT r.id,r.brand_id,b.name AS brand_name,r.item_id,r.revision,r.send_at,r.state,
-            wi.title AS title
-            FROM marketing_campaign_runs r JOIN brands b ON b.id=r.brand_id
-            JOIN marketing_work_items wi ON wi.id=r.item_id AND wi.brand_id=r.brand_id
-            ''' + run_where + ''' ORDER BY r.send_at,r.id LIMIT 250''', tuple(run_args))
-        runs = cur.fetchall()
-        for row in plans:
-            if row.get('planned_at'): row['planned_at'] = row['planned_at'].astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M')
-        for row in runs:
-            if row.get('send_at'): row['send_at'] = row['send_at'].astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
-        return render_template('marketing_calendar.html', plans=plans, runs=runs, brands=brands, brand_filter=brand_filter)
-    finally:conn.close()
+    return _calendar_response()
+
+
+@marketing.route('/api/marketing-calendar')
+def marketing_calendar_feed():
+    return _calendar_response(as_json=True)
+
 
 @marketing.route('/api/brands/<int:brand_id>/measurement-schedule',methods=['POST'])
 def measurement_schedule(brand_id):
